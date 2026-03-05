@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Server Connection</title>
+</head>
+<body>
+    <h1>Server Connection Test</h1>
+    <button onclick="testConnection()">Test Server</button>
+    <div id="result"></div>
+    
+    <script>
+        async function testConnection() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Testing...';
+            
+            try {
+                console.log('Testing server at: http://localhost:8000/api/health');
+                const response = await fetch('http://localhost:8000/api/health');
+                const data = await response.json();
+                resultDiv.innerHTML = `<p style="color: green;">✓ Server is running!</p><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                resultDiv.innerHTML = `<p style="color: red;">✗ Server connection failed:</p><pre>${error.message}</pre>`;
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test - Check if tabs are working</title>
+    <style>
+        .patient-nav-tabs {
+            display: flex;
+            background: white;
+            border-bottom: 2px solid #e2e8f0;
+            padding: 0;
+        }
+        .nav-tab {
+            flex: 1;
+            padding: 16px 20px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+        }
+        .nav-tab.active {
+            background: #f0f4ff;
+            color: #6366f1;
+        }
+    </style>
+</head>
+<body>
+    <h1>If you see tabs below, the CSS is working:</h1>
+    <div class="patient-nav-tabs">
+        <button class="nav-tab active">💬 Main</button>
+        <button class="nav-tab">👤 Account</button>
+        <button class="nav-tab">⚙️ Settings</button>
+    </div>
+    <p>If you see the tabs above, then the issue is with your main index.html file loading.</p>
+    <p>Try:</p>
+    <ol>
+        <li>Close ALL browser windows completely</li>
+        <li>Reopen your browser</li>
+        <li>Open index.html again</li>
+        <li>Press Ctrl+Shift+R to hard refresh</li>
+    </ol>
+</body>
+</html>
+

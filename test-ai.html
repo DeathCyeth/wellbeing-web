@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .test-section {
+            background: #f5f5f5;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #6366f1;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #4f46e5;
+        }
+        #results {
+            margin-top: 20px;
+            padding: 15px;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>AI Chat Debugging Test</h1>
+    
+    <div class="test-section">
+        <h3>Test 1: Check if elements exist</h3>
+        <button onclick="testElements()">Test Elements</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>Test 2: Check API Service</h3>
+        <button onclick="testAPIService()">Test API Service</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>Test 3: Test AI Endpoint</h3>
+        <button onclick="testAIEndpoint()">Test AI Endpoint</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>Test 4: Check Current User</h3>
+        <button onclick="testCurrentUser()">Check User</button>
+    </div>
+    
+    <div id="results"></div>
+    
+    <script src="api-service.js"></script>
+    <script>
+        const results = document.getElementById('results');
+        
+        function log(message) {
+            results.textContent += message + '\n';
+            console.log(message);
+        }
+        
+        function clearResults() {
+            results.textContent = '';
+        }
+        
+        function testElements() {
+            clearResults();
+            log('=== Testing Elements ===');
+            
+            const elements = [
+                'aiForm',
+                'aiQuestion',
+                'aiResponse',
+                'aiSubmitBtn'
+            ];
+            
+            elements.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    log(`✓ ${id} found`);
+                } else {
+                    log(`✗ ${id} NOT FOUND`);
+                }
+            });
+        }
+        
+        function testAPIService() {
+            clearResults();
+            log('=== Testing API Service ===');
+            
+            if (typeof apiService === 'undefined') {
+                log('✗ apiService is not defined');
+                return;
+            }
+            
+            log('✓ apiService exists');
+            log('API Base URL: ' + apiService.baseUrl);
+            
+            // Test connection
+            apiService.testConnection().then(result => {
+                log('Connection test: ' + JSON.stringify(result, null, 2));
+            }).catch(error => {
+                log('Connection test error: ' + error.message);
+            });
+        }
+        
+        async function testAIEndpoint() {
+            clearResults();
+            log('=== Testing AI Endpoint ===');
+            
+            if (typeof apiService === 'undefined') {
+                log('✗ apiService is not defined');
+                return;
+            }
+            
+            try {
+                log('Testing AI endpoint...');
+                const response = await apiService.getAIAdvice(
+                    'Hello, this is a test',
+                    'Test User',
+                    '',
+                    '',
+                    [],
+                    []
+                );
+                log('✓ AI endpoint responded');
+                log('Response: ' + JSON.stringify(response, null, 2));
+            } catch (error) {
+                log('✗ AI endpoint error: ' + error.message);
+                log('Full error: ' + JSON.stringify(error, null, 2));
+            }
+        }
+        
+        function testCurrentUser() {
+            clearResults();
+            log('=== Testing Current User ===');
+            
+            const savedUser = localStorage.getItem('currentUser');
+            if (savedUser) {
+                try {
+                    const user = JSON.parse(savedUser);
+                    log('✓ Found saved user:');
+                    log(JSON.stringify(user, null, 2));
+                } catch (e) {
+                    log('✗ Error parsing saved user: ' + e.message);
+                }
+            } else {
+                log('✗ No saved user found');
+                log('You need to log in first');
+            }
+        }
+    </script>
+</body>
+</html>
+

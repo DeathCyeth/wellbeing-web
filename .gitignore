@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+wellbeing.db
+.env
+.venv/
+venv/

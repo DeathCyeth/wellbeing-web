@@ -1,0 +1,74 @@
+═══════════════════════════════════════════════════════
+  WELLBEING COMPANION - QUICK START GUIDE
+═══════════════════════════════════════════════════════
+
+PROBLEM: "Cannot connect to server" error
+
+SOLUTION: You need to start the backend server first!
+
+═══════════════════════════════════════════════════════
+STEP 1: Install Python Dependencies
+═══════════════════════════════════════════════════════
+
+Open PowerShell in this folder and run:
+
+    pip install Flask flask-cors
+
+If that doesn't work, try:
+    python -m pip install Flask flask-cors
+
+═══════════════════════════════════════════════════════
+STEP 2: Start the Server
+═══════════════════════════════════════════════════════
+
+Option A - Double-click: start-server.bat
+
+Option B - Command line:
+    1. Open PowerShell
+    2. Type: cd C:\Users\Jamie\wellbeing-web
+    3. Type: python server.py
+    4. KEEP THE WINDOW OPEN!
+
+You should see:
+    ==================================================
+    Wellbeing Companion Backend Server
+    ==================================================
+    Server starting on http://localhost:8000
+    ==================================================
+
+═══════════════════════════════════════════════════════
+STEP 3: Test Your Web App
+═══════════════════════════════════════════════════════
+
+1. Open index.html in your browser
+2. Click "Test Server Connection" button
+3. Should see: "✓ Server connection successful!"
+
+═══════════════════════════════════════════════════════
+IMPORTANT NOTES
+═══════════════════════════════════════════════════════
+
+✓ The server MUST be running to use the web app
+✓ Don't close the server window - keep it open!
+✓ The server runs on http://localhost:8000
+✓ Database (wellbeing.db) is created automatically
+
+═══════════════════════════════════════════════════════
+TROUBLESHOOTING
+═══════════════════════════════════════════════════════
+
+"python is not recognized"
+  → Try: python3
+  → Or install Python from python.org
+
+"No module named 'flask'"
+  → Run: pip install Flask flask-cors
+  → Or: python -m pip install Flask flask-cors
+
+Still can't connect?
+  → Make sure server window is open
+  → Check browser console (F12) for errors
+  → Verify API URL in api-service.js is: http://localhost:8000/api
+
+═══════════════════════════════════════════════════════
+

@@ -1,0 +1,27 @@
+IMPORTANT: To see the changes, you need to:
+
+1. Make sure you're opening the file from:
+   C:\Users\Jamie\Desktop\wellbeing-web\index.html
+
+2. If using a local server, STOP it and RESTART it:
+   - Stop the Python/Node server
+   - Delete any __pycache__ folders
+   - Restart the server
+
+3. In your browser:
+   - Press Ctrl+Shift+Delete to clear cache
+   - OR press Ctrl+F5 (hard refresh)
+   - OR open in Incognito/Private mode
+
+4. Check the browser console (F12):
+   - Look for "Page loaded - Version 3.0 with tabs"
+   - Check for any JavaScript errors
+
+5. Make sure you're logged in as a PATIENT (not Doctor)
+   - Tabs only appear for Patient accounts
+
+If you still don't see tabs:
+- Check that index.html contains "patient-nav-tabs" (search the file)
+- Check browser console for errors
+- Try a different browser
+
