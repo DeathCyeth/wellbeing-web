@@ -1239,9 +1239,10 @@ def serve_static(filename):
     return '', 404
 
 
+# Initialize database when app is loaded (needed when running under gunicorn on Render)
+init_db()
+
 if __name__ == '__main__':
-    # Initialize database
-    init_db()
     port = int(os.environ.get('PORT', 8000))
     debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
     print("=" * 50)
