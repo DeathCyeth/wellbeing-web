@@ -1039,6 +1039,8 @@ User Preferences:
 - Likes: {likes if likes else 'Not specified'}
 - Dislikes: {dislikes if dislikes else 'Not specified'}
 
+Important: When suggesting recipes, meals, or any food recommendations, you MUST respect the user's dislikes. Never recommend or suggest any food, ingredient, or meal that appears in their dislikes list. Use their likes when possible to suggest foods they enjoy.
+
 Doctor-recorded information (use this to personalize advice and avoid conflicting with care plans):
 {medical_context}
 
@@ -1186,22 +1188,19 @@ def generate_nutrition_plan():
 - carbs_g: e.g. "200"
 - protein_g: e.g. "150"
 - fats_g: e.g. "65"
-- foods_include: array of 3-5 food items to include (you may consider the patient's likes when suggesting foods)
-- foods_avoid: array of 3-5 foods to avoid based ONLY on medical needs (allergies, conditions, diabetes, medications, interactions). Do NOT include the patient's dislikes or preferences here—they already know what they don't like; this section must be strictly medically relevant (e.g. allergens, foods that worsen their conditions, or that interact with medications).
-- day1_breakfast, day1_lunch, day1_dinner: meal descriptions
-- day2_breakfast, day2_lunch, day2_dinner: meal descriptions
-- day3_breakfast, day3_lunch, day3_dinner: meal descriptions
-- grocery_produce: array of 5 items
-- grocery_grains: array of 5 items
-- grocery_proteins: array of 5 items
-- grocery_fats_extras: array of 5 items
+- foods_include: array of 3-5 food items to include (prefer the patient's likes; NEVER include any food from their dislikes list)
+- foods_avoid: array of 3-5 foods to avoid based ONLY on medical needs (allergies, conditions, diabetes, medications, interactions). Do NOT put the patient's dislikes here—this section is strictly medically relevant (e.g. allergens, foods that worsen conditions, or that interact with medications).
+- day1_breakfast, day1_lunch, day1_dinner: meal descriptions (must NOT contain any foods from the patient's dislikes)
+- day2_breakfast, day2_lunch, day2_dinner: meal descriptions (must NOT contain any foods from the patient's dislikes)
+- day3_breakfast, day3_lunch, day3_dinner: meal descriptions (must NOT contain any foods from the patient's dislikes)
+- grocery_produce, grocery_grains, grocery_proteins, grocery_fats_extras: arrays of 5 items each (must NOT include any foods from the patient's dislikes)
 - smart_goal: one short SMART goal sentence
 - references: optional short note or "—"
 
 Patient context:
 {context}
 
-Return only valid JSON, no other text. Use the patient's age, sex, weight, goals, allergies, and activity to set realistic numbers and specific foods. Remember: foods_avoid = medically relevant only (allergies, conditions, drug interactions); never include the patient's dislikes."""
+Return only valid JSON, no other text. Use the patient's age, sex, weight, goals, allergies, and activity to set realistic numbers. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
 
         client = OpenAI(api_key=api_key)
         completion = client.chat.completions.create(
