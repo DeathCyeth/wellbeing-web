@@ -209,8 +209,8 @@ def health():
 def login():
     """User login"""
     data = request.get_json()
-    username = data.get('username', '').lower()
-    password = data.get('password', '')
+    username = (data.get('username') or '').strip().lower()
+    password = (data.get('password') or '')
     
     if not username or not password:
         return jsonify({"error": "Username and password required"}), 400
@@ -249,10 +249,10 @@ def login():
 def create_user():
     """Create a new user"""
     data = request.get_json()
-    username = data.get('username', '').lower()
+    username = (data.get('username') or '').strip().lower()
     password = data.get('password', '')
-    name = data.get('name', '')
-    role = data.get('role', 'Patient')
+    name = (data.get('name') or '').strip()
+    role = (data.get('role') or 'Patient').strip()
     
     if not all([username, password, name]):
         return jsonify({"error": "Username, password, and name are required"}), 400
