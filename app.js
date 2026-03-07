@@ -234,12 +234,19 @@ function showScreen(screenId) {
         screen.classList.remove('active');
     });
     document.getElementById(screenId).classList.add('active');
-    // When showing login screen, clear any previous error and refresh "You're on:" hint
+    // When showing login screen, clear any previous error and refresh "You're on:" + server instance ID
     if (screenId === 'loginScreen') {
         var errEl = document.getElementById('loginError');
         if (errEl) errEl.textContent = '';
         var hintEl = document.getElementById('loginSiteHint');
-        if (hintEl) hintEl.textContent = "You're on: " + (window.location.hostname || window.location.host || '');
+        if (hintEl) {
+            hintEl.textContent = "You're on: " + (window.location.hostname || window.location.host || '');
+            if (typeof apiService !== 'undefined') {
+                apiService.request('/health').then(function (r) {
+                    if (r && r.instance_id && hintEl) hintEl.textContent = "You're on: " + (window.location.hostname || '') + " \u00B7 Server: " + r.instance_id;
+                }).catch(function () {});
+            }
+        }
     }
 }
 

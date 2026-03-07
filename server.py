@@ -34,12 +34,39 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Database file
+# Database: SQLite by default, or PostgreSQL when DATABASE_URL is set (fixes cross-device login)
 DB_NAME = "wellbeing.db"
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)  # psycopg2 expects postgresql://
+USE_PG = bool(DATABASE_URL and 'postgresql' in DATABASE_URL.lower())
+
+def get_conn():
+    if USE_PG:
+        try:
+            import psycopg2
+            return psycopg2.connect(DATABASE_URL)
+        except ImportError:
+            pass
+    return get_conn()
+
+def _run_execute_impl(cursor, sql, params=None):
+    if params is None:
+        params = ()
+    if USE_PG:
+        cursor.execute(sql.replace('?', '%s'), params)
+    else:
+        cursor.execute(sql, params)
+
+def run_execute(cursor, sql, params=None):
+    _run_execute_impl(cursor, sql, params)
 
 # Directory containing this script (for serving frontend when deployed)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ALLOWED_STATIC = {'index.html', 'styles.css', 'app.js', 'api-service.js', 'logo.png', 'favicon.ico'}
+
+# Unique ID for this server instance (different containers = different IDs; compare laptop vs tablet)
+INSTANCE_ID = os.environ.get('RENDER_INSTANCE_ID') or str(uuid.uuid4())[:8]
 
 def generate_patient_id():
     """Generate a unique numerical patient ID"""
@@ -48,21 +75,24 @@ def generate_patient_id():
         # Generate number between 100000 and 999999
         patient_id = random.randint(100000, 999999)
         # Check if it's already taken
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_conn()
         cursor = conn.cursor()
-        cursor.execute("SELECT username FROM users WHERE patient_id=?", (str(patient_id),))
+        run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (str(patient_id),))
         if not cursor.fetchone():
             conn.close()
             return str(patient_id)
         conn.close()
 
 def init_db():
-    """Initialize the database with required tables"""
-    conn = sqlite3.connect(DB_NAME)
+    """Initialize the database with required tables (SQLite or PostgreSQL)."""
+    if USE_PG:
+        init_db_pg()
+        return
+    conn = get_conn()
     cursor = conn.cursor()
     
     # Users table
-    cursor.execute("""
+    run_execute(cursor, """
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             password TEXT NOT NULL,
@@ -73,40 +103,30 @@ def init_db():
         )
     """)
     
-    # Add patient_id column to existing tables if it doesn't exist
     try:
-        cursor.execute("ALTER TABLE users ADD COLUMN patient_id TEXT")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-    
-    # Add unique constraint if it doesn't exist (SQLite doesn't support ADD CONSTRAINT, so we'll handle uniqueness in code)
+        run_execute(cursor, "ALTER TABLE users ADD COLUMN patient_id TEXT")
+    except (sqlite3.OperationalError, Exception):
+        pass
     try:
-        # Check if unique index exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_patient_id_unique'")
+        run_execute(cursor, "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_patient_id_unique'")
         if not cursor.fetchone():
-            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_patient_id_unique ON users(patient_id) WHERE patient_id IS NOT NULL")
-    except sqlite3.OperationalError:
+            run_execute(cursor, "CREATE UNIQUE INDEX IF NOT EXISTS idx_patient_id_unique ON users(patient_id) WHERE patient_id IS NOT NULL")
+    except (sqlite3.OperationalError, Exception):
+        pass
+    try:
+        run_execute(cursor, "ALTER TABLE users ADD COLUMN age INTEGER")
+    except (sqlite3.OperationalError, Exception):
         pass
     
-    # Add age column to existing tables if it doesn't exist
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN age INTEGER")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-    
-    # Generate patient_id for existing users who don't have one
-    # Also convert old PAT-XXXX format to numerical
-    cursor.execute("SELECT username, patient_id FROM users WHERE role='Patient'")
+    run_execute(cursor, "SELECT username, patient_id FROM users WHERE role='Patient'")
     all_patients = cursor.fetchall()
     for (username, existing_id) in all_patients:
-        if not existing_id or existing_id.startswith('PAT-'):
-            # Generate new numerical ID
+        if not existing_id or (str(existing_id or '')).startswith('PAT-'):
             new_id = generate_patient_id()
-            cursor.execute("UPDATE users SET patient_id=? WHERE username=?", (new_id, username))
+            run_execute(cursor, "UPDATE users SET patient_id=? WHERE username=?", (new_id, username))
             print(f"Generated Patient ID {new_id} for {username}")
     
-    # Preferences table
-    cursor.execute("""
+    run_execute(cursor, """
         CREATE TABLE IF NOT EXISTS preferences (
             username TEXT PRIMARY KEY,
             likes TEXT,
@@ -114,9 +134,7 @@ def init_db():
             FOREIGN KEY(username) REFERENCES users(username)
         )
     """)
-    
-    # Notes table
-    cursor.execute("""
+    run_execute(cursor, """
         CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
@@ -125,9 +143,7 @@ def init_db():
             FOREIGN KEY(username) REFERENCES users(username)
         )
     """)
-    
-    # Patient Medical Information table
-    cursor.execute("""
+    run_execute(cursor, """
         CREATE TABLE IF NOT EXISTS patient_medical_info (
             username TEXT PRIMARY KEY,
             past_medical_history TEXT,
@@ -141,46 +157,76 @@ def init_db():
             FOREIGN KEY(username) REFERENCES users(username)
         )
     """)
-    
-    # Add sex column to users table if it doesn't exist
     try:
-        cursor.execute("ALTER TABLE users ADD COLUMN sex TEXT")
-    except sqlite3.OperationalError:
+        run_execute(cursor, "ALTER TABLE users ADD COLUMN sex TEXT")
+    except (sqlite3.OperationalError, Exception):
         pass
-    # New user fields (patient info & search)
     for col, ctype in [
-        ("date_of_birth", "TEXT"),
-        ("middle_initial", "TEXT"),
-        ("last_name", "TEXT"),
-        ("biological_sex", "TEXT"),
-        ("gender_identity", "TEXT"),
+        ("date_of_birth", "TEXT"), ("middle_initial", "TEXT"), ("last_name", "TEXT"),
+        ("biological_sex", "TEXT"), ("gender_identity", "TEXT"),
     ]:
         try:
-            cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
-        except sqlite3.OperationalError:
+            run_execute(cursor, f"ALTER TABLE users ADD COLUMN {col} {ctype}")
+        except (sqlite3.OperationalError, Exception):
             pass
-    # New medical_info fields (biometrics, conditions, lifestyle)
     for col, ctype in [
-        ("height_feet", "INTEGER"),
-        ("height_inches", "REAL"),
-        ("waist_cm", "TEXT"),
-        ("hip_cm", "TEXT"),
-        ("body_fat_pct", "TEXT"),
-        ("lean_mass_kg", "TEXT"),
-        ("weight_units", "TEXT"),
-        ("height_units", "TEXT"),
-        ("diabetes_type", "TEXT"),
-        ("chronic_conditions", "TEXT"),
-        ("weekly_food_budget", "TEXT"),
-        ("activity_level", "TEXT"),
+        ("height_feet", "INTEGER"), ("height_inches", "REAL"), ("waist_cm", "TEXT"),
+        ("hip_cm", "TEXT"), ("body_fat_pct", "TEXT"), ("lean_mass_kg", "TEXT"),
+        ("weight_units", "TEXT"), ("height_units", "TEXT"), ("diabetes_type", "TEXT"),
+        ("chronic_conditions", "TEXT"), ("weekly_food_budget", "TEXT"), ("activity_level", "TEXT"),
     ]:
         try:
-            cursor.execute(f"ALTER TABLE patient_medical_info ADD COLUMN {col} {ctype}")
-        except sqlite3.OperationalError:
+            run_execute(cursor, f"ALTER TABLE patient_medical_info ADD COLUMN {col} {ctype}")
+        except (sqlite3.OperationalError, Exception):
             pass
-    
     conn.commit()
     conn.close()
+
+
+def init_db_pg():
+    """Create PostgreSQL tables (one shared DB for all devices)."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username VARCHAR(255) PRIMARY KEY,
+            password VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            role VARCHAR(64) NOT NULL,
+            patient_id VARCHAR(32) UNIQUE,
+            age INTEGER,
+            sex VARCHAR(64),
+            date_of_birth TEXT, middle_initial TEXT, last_name TEXT,
+            biological_sex TEXT, gender_identity TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS preferences (
+            username VARCHAR(255) PRIMARY KEY REFERENCES users(username),
+            likes TEXT, dislikes TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(255) NOT NULL REFERENCES users(username),
+            note TEXT NOT NULL,
+            created_at BIGINT NOT NULL
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS patient_medical_info (
+            username VARCHAR(255) PRIMARY KEY REFERENCES users(username),
+            past_medical_history TEXT, patient_goals TEXT, food_allergies TEXT,
+            physical_activity TEXT, current_medications TEXT, height TEXT, weight TEXT, sex TEXT,
+            height_feet INTEGER, height_inches REAL, waist_cm TEXT, hip_cm TEXT, body_fat_pct TEXT,
+            lean_mass_kg TEXT, weight_units TEXT, height_units TEXT, diabetes_type TEXT,
+            chronic_conditions TEXT, weekly_food_budget TEXT, activity_level TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+    print("PostgreSQL tables initialized (shared DB for all devices)")
 
 def _empty_medical_info(sex_default=""):
     """Return empty medical_info dict with all keys (including new biometric/conditions fields)."""
@@ -210,8 +256,8 @@ def _empty_medical_info(sex_default=""):
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
-    return jsonify({"status": "ok"})
+    """Health check endpoint. instance_id: same on laptop & tablet = same server; different = different DB."""
+    return jsonify({"status": "ok", "instance_id": INSTANCE_ID})
 
 @app.route('/api/users/login', methods=['POST'])
 def login():
@@ -223,9 +269,9 @@ def login():
     if not username or not password:
         return jsonify({"error": "Username and password required"}), 400
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute(
+    run_execute(cursor,
         "SELECT username, password, name, role, patient_id, age, sex FROM users WHERE username=?",
         (username,)
     )
@@ -239,7 +285,7 @@ def login():
         patient_id = user[4] or ""
         if user[3].lower() == 'patient' and not patient_id:
             patient_id = generate_patient_id()
-            cursor.execute("UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
+            run_execute(cursor,"UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
             conn.commit()
             print(f"Generated Patient ID {patient_id} for {user[0]}")
         
@@ -271,7 +317,7 @@ def create_user():
     if not all([username, password, name]):
         return jsonify({"error": "Username, password, and name are required"}), 400
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     
     # Generate patient_id for all users (patients and doctors can have one, but it's mainly for patients)
@@ -280,13 +326,13 @@ def create_user():
         # Keep generating until we get a unique one
         while True:
             new_id = generate_patient_id()
-            cursor.execute("SELECT username FROM users WHERE patient_id=?", (new_id,))
+            run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (new_id,))
             if not cursor.fetchone():
                 patient_id = new_id
                 break
     
     try:
-        cursor.execute(
+        run_execute(cursor,
             "INSERT INTO users (username, password, name, role, patient_id) VALUES (?, ?, ?, ?, ?)",
             (username, password, name, role, patient_id)
         )
@@ -307,11 +353,11 @@ def get_user(username):
     """Get user by username"""
     try:
         print(f"GET /api/users/{username} - Starting...")
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_conn()
         cursor = conn.cursor()
         
         print(f"Querying user: {username.lower()}")
-        cursor.execute(
+        run_execute(cursor,
             "SELECT username, name, role, patient_id, age, sex, date_of_birth, middle_initial, last_name, biological_sex, gender_identity FROM users WHERE username=?",
             (username.lower(),)
         )
@@ -329,7 +375,7 @@ def get_user(username):
         if user[2].lower() == 'patient' and not user[3]:
             print(f"Generating Patient ID for {user[0]}")
             patient_id = generate_patient_id()
-            cursor.execute("UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
+            run_execute(cursor,"UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
             conn.commit()
             user = (user[0], user[1], user[2], patient_id, user[4], user[5], user[6], user[7], user[8], user[9], user[10])
             print(f"Generated Patient ID {patient_id} for {user[0]}")
@@ -339,7 +385,7 @@ def get_user(username):
         try:
             print("Loading medical info...")
             try:
-                cursor.execute(
+                run_execute(cursor,
                     """SELECT past_medical_history, patient_goals, food_allergies, physical_activity, current_medications,
                        height, weight, sex, height_feet, height_inches, waist_cm, hip_cm, body_fat_pct, lean_mass_kg,
                        weight_units, height_units, diabetes_type, chronic_conditions, weekly_food_budget, activity_level
@@ -347,7 +393,7 @@ def get_user(username):
                     (username.lower(),)
                 )
             except sqlite3.OperationalError:
-                cursor.execute(
+                run_execute(cursor,
                     "SELECT past_medical_history, patient_goals, food_allergies, physical_activity, current_medications, height, weight, sex FROM patient_medical_info WHERE username=?",
                     (username.lower(),)
                 )
@@ -410,15 +456,15 @@ def get_user(username):
 @app.route('/api/users/patients', methods=['GET'])
 def list_patients():
     """Return all patients for dropdown (username, name, patient_id), ordered by name."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     try:
-        cursor.execute(
+        run_execute(cursor,
             "SELECT username, name, patient_id FROM users WHERE role='Patient' ORDER BY LOWER(name), username"
         )
         rows = cursor.fetchall()
     except sqlite3.OperationalError:
-        cursor.execute(
+        run_execute(cursor,
             "SELECT username, name, patient_id FROM users WHERE role='Patient' ORDER BY name, username"
         )
         rows = cursor.fetchall()
@@ -433,15 +479,15 @@ def search_users():
     dob = (request.args.get('dob') or request.args.get('date_of_birth') or '').strip()
     if not last_name and not dob:
         return jsonify({"error": "Provide at least one of: last_name, dob"}), 400
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     try:
-        cursor.execute(
+        run_execute(cursor,
             "SELECT username, name, role, patient_id, age, sex, date_of_birth, middle_initial, last_name, biological_sex, gender_identity FROM users WHERE role='Patient'"
         )
         rows = cursor.fetchall()
     except sqlite3.OperationalError:
-        cursor.execute("SELECT username, name, role, patient_id, age, sex FROM users WHERE role='Patient'")
+        run_execute(cursor,"SELECT username, name, role, patient_id, age, sex FROM users WHERE role='Patient'")
         rows = [list(r) + [None] * (11 - len(r)) for r in cursor.fetchall()]
     conn.close()
     results = []
@@ -473,15 +519,15 @@ def search_users():
 def get_user_by_patient_id(patient_id):
     """Get user by patient_id (returns same shape as get_user with new fields)."""
     try:
-        conn = sqlite3.connect(DB_NAME)
+        conn = get_conn()
         cursor = conn.cursor()
         try:
-            cursor.execute(
+            run_execute(cursor,
                 "SELECT username, name, role, patient_id, age, sex, date_of_birth, middle_initial, last_name, biological_sex, gender_identity FROM users WHERE patient_id=?",
                 (patient_id,)
             )
         except sqlite3.OperationalError:
-            cursor.execute("SELECT username, name, role, patient_id, age, sex FROM users WHERE patient_id=?", (patient_id,))
+            run_execute(cursor,"SELECT username, name, role, patient_id, age, sex FROM users WHERE patient_id=?", (patient_id,))
         user = cursor.fetchone()
         if user:
             user = list(user) + [None] * (11 - len(user))
@@ -490,7 +536,7 @@ def get_user_by_patient_id(patient_id):
         medical_info = None
         if user:
             try:
-                cursor.execute(
+                run_execute(cursor,
                     """SELECT past_medical_history, patient_goals, food_allergies, physical_activity, current_medications,
                        height, weight, sex, height_feet, height_inches, waist_cm, hip_cm, body_fat_pct, lean_mass_kg,
                        weight_units, height_units, diabetes_type, chronic_conditions, weekly_food_budget, activity_level
@@ -558,7 +604,7 @@ def update_user(username):
     if not name:
         return jsonify({"error": "Name is required"}), 400
     uname = username.lower()
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     updates = ["name=?"]
     values = [name]
@@ -577,7 +623,7 @@ def update_user(username):
             values.append(val)
     values.append(uname)
     try:
-        cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE username=?", values)
+        run_execute(cursor,f"UPDATE users SET {', '.join(updates)} WHERE username=?", values)
     except sqlite3.OperationalError as e:
         conn.close()
         if "no such column" in str(e).lower():
@@ -593,9 +639,9 @@ def update_user(username):
 @app.route('/api/users/<username>/preferences', methods=['GET'])
 def get_preferences(username):
     """Get user preferences"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute(
+    run_execute(cursor,
         "SELECT likes, dislikes FROM preferences WHERE username=?",
         (username.lower(),)
     )
@@ -615,19 +661,19 @@ def get_preferences(username):
 def get_preferences_by_patient_id(patient_id):
     """Get preferences by patient_id (tries resolved username, then username=patient_id)."""
     pid = str(patient_id).strip()
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT username FROM users WHERE patient_id=?", (pid,))
+    run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (pid,))
     row = cursor.fetchone()
     username = row[0] if row else None
     out = {"likes": "", "dislikes": ""}
     for uname in ([username] if username else []) + ([pid] if pid else []):
         if not uname:
             continue
-        cursor.execute("SELECT likes, dislikes FROM preferences WHERE username=?", (uname.lower(),))
+        run_execute(cursor,"SELECT likes, dislikes FROM preferences WHERE username=?", (uname.lower(),))
         prefs = cursor.fetchone()
         if not prefs:
-            cursor.execute("SELECT likes, dislikes FROM preferences WHERE username=?", (uname,))
+            run_execute(cursor,"SELECT likes, dislikes FROM preferences WHERE username=?", (uname,))
             prefs = cursor.fetchone()
         if prefs and (prefs[0] or prefs[1]):
             out = {"likes": prefs[0] or "", "dislikes": prefs[1] or ""}
@@ -642,9 +688,9 @@ def update_preferences(username):
     likes = data.get('likes', '')
     dislikes = data.get('dislikes', '')
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute(
+    run_execute(cursor,
         """INSERT INTO preferences (username, likes, dislikes) 
            VALUES (?, ?, ?) 
            ON CONFLICT(username) DO UPDATE SET likes=excluded.likes, dislikes=excluded.dislikes""",
@@ -657,15 +703,15 @@ def update_preferences(username):
 @app.route('/api/users/<username>/notes', methods=['GET'])
 def get_notes(username):
     """Get doctor notes for a user (case-insensitive username match)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     uname_lower = username.lower() if username else ""
-    cursor.execute(
+    run_execute(cursor,
         "SELECT note, created_at FROM notes WHERE LOWER(username)=? ORDER BY created_at DESC",
         (uname_lower,)
     )
     notes = cursor.fetchall()
-    cursor.execute("SELECT username FROM notes")
+    run_execute(cursor,"SELECT username FROM notes")
     all_usernames = [r[0] for r in cursor.fetchall()]
     conn.close()
     print(f"[get_notes] username={username!r} LOWER={uname_lower!r} -> {len(notes)} notes (all notes usernames: {all_usernames})")
@@ -678,21 +724,21 @@ def get_notes(username):
 @app.route('/api/users/by-patient-id/<patient_id>/notes', methods=['GET'])
 def get_notes_by_patient_id(patient_id):
     """Get doctor notes for a user by patient_id. Returns notes under username, or under patient_id if stored that way."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     pid = str(patient_id).strip()
-    cursor.execute("SELECT username FROM users WHERE patient_id=?", (pid,))
+    run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (pid,))
     row = cursor.fetchone()
     username = row[0] if row else None
     uname_lower = (username or "").lower()
-    cursor.execute(
+    run_execute(cursor,
         "SELECT note, created_at FROM notes WHERE LOWER(username)=? ORDER BY created_at DESC",
         (uname_lower,)
     )
     notes = cursor.fetchall()
     # If no notes under username, also check under patient_id (doctor may have stored notes that way)
     if len(notes) == 0 and pid:
-        cursor.execute(
+        run_execute(cursor,
             "SELECT note, created_at FROM notes WHERE username=? ORDER BY created_at DESC",
             (pid,)
         )
@@ -707,7 +753,7 @@ def get_notes_by_patient_id(patient_id):
 def _notes_summary_for_username(cursor, username):
     """Return notes summary dict for a username (case-insensitive). cursor must be open; caller closes conn."""
     uname_lower = (username or "").lower()
-    cursor.execute(
+    run_execute(cursor,
         "SELECT note, created_at FROM notes WHERE LOWER(username)=? ORDER BY created_at DESC",
         (uname_lower,)
     )
@@ -752,7 +798,7 @@ def _notes_summary_for_username(cursor, username):
 @app.route('/api/users/<username>/notes/summary', methods=['GET'])
 def get_notes_summary(username):
     """Get a readable summary of all doctor notes for a user (most recent first)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     result = _notes_summary_for_username(cursor, username)
     conn.close()
@@ -763,9 +809,9 @@ def get_notes_summary(username):
 @app.route('/api/users/by-patient-id/<patient_id>/notes/summary', methods=['GET'])
 def get_notes_summary_by_patient_id(patient_id):
     """Get notes summary by patient ID (so patient always gets their notes)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT username FROM users WHERE patient_id=?", (str(patient_id).strip(),))
+    run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (str(patient_id).strip(),))
     row = cursor.fetchone()
     if not row:
         conn.close()
@@ -794,9 +840,9 @@ def add_note(username):
     created_at = int(datetime.now().timestamp() * 1000)  # Milliseconds since epoch
     uname_lower = (username or "").strip().lower()
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute(
+    run_execute(cursor,
         "INSERT INTO notes (username, note, created_at) VALUES (?, ?, ?)",
         (uname_lower, note, created_at)
     )
@@ -808,10 +854,10 @@ def add_note(username):
 @app.route('/api/users/<username>/medical-info', methods=['GET'])
 def get_medical_info(username):
     """Get patient medical information (includes new biometric/conditions fields)."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     try:
-        cursor.execute(
+        run_execute(cursor,
             """SELECT past_medical_history, patient_goals, food_allergies, physical_activity, current_medications,
                height, weight, sex, height_feet, height_inches, waist_cm, hip_cm, body_fat_pct, lean_mass_kg,
                weight_units, height_units, diabetes_type, chronic_conditions, weekly_food_budget, activity_level
@@ -853,16 +899,16 @@ def get_medical_info(username):
 def get_medical_info_by_patient_id(patient_id):
     """Get medical info by patient_id (tries resolved username, then username=patient_id)."""
     pid = str(patient_id).strip()
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT username FROM users WHERE patient_id=?", (pid,))
+    run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (pid,))
     row = cursor.fetchone()
     username = row[0] if row else None
     for uname in ([username] if username else []) + ([pid] if pid else []):
         if not uname:
             continue
         try:
-            cursor.execute(
+            run_execute(cursor,
                 """SELECT past_medical_history, patient_goals, food_allergies, physical_activity, current_medications,
                    height, weight, sex, height_feet, height_inches, waist_cm, hip_cm, body_fat_pct, lean_mass_kg,
                    weight_units, height_units, diabetes_type, chronic_conditions, weekly_food_budget, activity_level
@@ -871,7 +917,7 @@ def get_medical_info_by_patient_id(patient_id):
             )
             med = cursor.fetchone()
             if not med:
-                cursor.execute(
+                run_execute(cursor,
                     """SELECT past_medical_history, patient_goals, food_allergies, physical_activity, current_medications,
                        height, weight, sex, height_feet, height_inches, waist_cm, hip_cm, body_fat_pct, lean_mass_kg,
                        weight_units, height_units, diabetes_type, chronic_conditions, weekly_food_budget, activity_level
@@ -914,9 +960,9 @@ def update_medical_info(username):
     """Update patient medical information (includes new biometric/conditions fields)."""
     data = request.get_json()
     uname = username.lower()
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute(
+    run_execute(cursor,
         """INSERT INTO patient_medical_info (
             username, past_medical_history, patient_goals, food_allergies,
             physical_activity, current_medications, height, weight, sex,
@@ -1131,38 +1177,38 @@ def generate_nutrition_plan():
     patient_id = (data.get('patient_id') or '').strip()
     if not username and not patient_id:
         return jsonify({"error": "Provide username or patient_id"}), 400
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_conn()
     cursor = conn.cursor()
     try:
         if patient_id and not username:
-            cursor.execute("SELECT username FROM users WHERE patient_id=?", (patient_id,))
+            run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (patient_id,))
             row = cursor.fetchone()
             username = (row[0] or '').strip() if row else ''
         if not username:
             conn.close()
             return jsonify({"error": "Patient not found"}), 404
         uname_lower = username.lower()
-        cursor.execute(
+        run_execute(cursor,
             "SELECT name, age, sex FROM users WHERE username=?", (uname_lower,)
         )
         user_row = cursor.fetchone()
         user_name = user_row[0] if user_row else username
         user_age = user_row[1] if user_row and len(user_row) > 1 else None
         user_sex = user_row[2] if user_row and len(user_row) > 2 else ""
-        cursor.execute(
+        run_execute(cursor,
             "SELECT likes, dislikes FROM preferences WHERE username=?", (uname_lower,)
         )
         prefs_row = cursor.fetchone()
         likes = (prefs_row[0] or "") if prefs_row else ""
         dislikes = (prefs_row[1] or "") if prefs_row and len(prefs_row) > 1 else ""
-        cursor.execute(
+        run_execute(cursor,
             "SELECT note, created_at FROM notes WHERE LOWER(username)=? ORDER BY created_at DESC LIMIT 5",
             (uname_lower,)
         )
         notes_rows = cursor.fetchall()
         notes_txt = "\n".join([n[0] or "" for n in notes_rows]) if notes_rows else ""
         try:
-            cursor.execute(
+            run_execute(cursor,
                 """SELECT past_medical_history, patient_goals, food_allergies, physical_activity, current_medications,
                    height, weight, height_feet, height_inches, diabetes_type, chronic_conditions, activity_level
                    FROM patient_medical_info WHERE username=?""",
