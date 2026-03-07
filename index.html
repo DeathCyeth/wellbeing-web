@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wellbeing Companion</title>
-    <link rel="stylesheet" href="styles.css?v=3.0">
+    <link rel="stylesheet" href="styles.css?v=4.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -31,6 +31,7 @@
                     <button type="submit" class="btn btn-primary">Log In</button>
                     <button type="button" class="btn btn-link" onclick="showScreen('registerScreen')">Create account</button>
                     <div id="loginError" class="error-message"></div>
+                    <p id="loginSiteHint" class="login-site-hint" style="margin-top:12px;font-size:0.8rem;color:var(--text-light);"></p>
                 </form>
             </div>
         </div>
@@ -416,11 +417,15 @@
         <button onclick="document.getElementById('debugPanel').style.display='none'" style="margin-top: 5px; padding: 5px;">Close</button>
     </div>
 
-    <script src="api-service.js?v=3.0"></script>
-    <script src="app.js?v=3.0"></script>
+    <script src="api-service.js?v=4.0"></script>
+    <script src="app.js?v=4.0"></script>
     <script>
-        // Force cache refresh
-        console.log('Page loaded - Version 3.0 with tabs');
+        // Show which site we're on (so tablet users can confirm same URL as desktop)
+        (function () {
+            var h = document.getElementById('loginSiteHint');
+            if (h) h.textContent = 'You\'re on: ' + (window.location.hostname || window.location.host || '');
+        })();
+        console.log('Page loaded - Version 4.0');
         console.log('Checking for patient tabs...');
         const tabsEl = document.querySelector('.patient-nav-tabs');
         const tabContentEls = document.querySelectorAll('.patient-tab-content');

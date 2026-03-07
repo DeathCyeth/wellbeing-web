@@ -234,10 +234,12 @@ function showScreen(screenId) {
         screen.classList.remove('active');
     });
     document.getElementById(screenId).classList.add('active');
-    // When showing login screen, clear any previous error so it doesn't confuse when switching accounts
+    // When showing login screen, clear any previous error and refresh "You're on:" hint
     if (screenId === 'loginScreen') {
         var errEl = document.getElementById('loginError');
         if (errEl) errEl.textContent = '';
+        var hintEl = document.getElementById('loginSiteHint');
+        if (hintEl) hintEl.textContent = "You're on: " + (window.location.hostname || window.location.host || '');
     }
 }
 
@@ -288,11 +290,14 @@ async function handleLogin() {
         if (errorMessage.includes('Cannot connect to server') || errorMessage.includes('fetch')) {
             errorMessage = 'Cannot connect to server. Please check:\n1. Is your backend server running?\n2. Is the API URL correct in api-service.js?\n3. Check browser console (F12) for details.';
             errorDiv.style.whiteSpace = 'pre-line';
+        } else if (errorMessage.toLowerCase().includes('invalid') && (errorMessage.includes('username') || errorMessage.includes('password'))) {
+            errorMessage = 'Invalid username or password.\n\nOn a tablet or other device? Use the exact same web address as on your computer (see "You\'re on:" below). Type your username and password again—no extra spaces. If you just created this account on another device, wait a moment and try again.';
+            errorDiv.style.whiteSpace = 'pre-line';
         }
         
         errorDiv.textContent = errorMessage;
         console.error('Login error details:', error);
-        showToast(`Login failed: ${errorMessage.split('\n')[0]}`, 'error');
+        showToast('Login failed. See message above.', 'error');
     }
 }
 
