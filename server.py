@@ -48,7 +48,7 @@ def get_conn():
             return psycopg2.connect(DATABASE_URL)
         except ImportError:
             pass
-    return get_conn()
+    return sqlite3.connect(DB_NAME)
 
 def _run_execute_impl(cursor, sql, params=None):
     if params is None:
