@@ -1,4 +1,4 @@
-﻿// Main Application Logic
+// Main Application Logic
 
 // Current user state
 let currentUser = null;
@@ -234,6 +234,11 @@ function showScreen(screenId) {
         screen.classList.remove('active');
     });
     document.getElementById(screenId).classList.add('active');
+    // When showing login screen, clear any previous error so it doesn't confuse when switching accounts
+    if (screenId === 'loginScreen') {
+        var errEl = document.getElementById('loginError');
+        if (errEl) errEl.textContent = '';
+    }
 }
 
 // Login handler
@@ -1950,12 +1955,22 @@ async function addDoctorNote() {
 // Logout
 function logout() {
     currentUser = null;
+    doctorAIConversationHistory = [];
     aiConversationHistory = []; // Clear conversation on logout
     localStorage.removeItem('currentUser');
     showScreen('loginScreen');
     // Clear forms
     document.getElementById('loginForm').reset();
     document.getElementById('registerForm').reset();
+    // Force-clear login fields so browser autofill doesn't leave previous account when switching Patient/Doctor
+    var loginErr = document.getElementById('loginError');
+    if (loginErr) loginErr.textContent = '';
+    setTimeout(function () {
+        var u = document.getElementById('loginUsername');
+        var p = document.getElementById('loginPassword');
+        if (u) u.value = '';
+        if (p) p.value = '';
+    }, 0);
 }
 
 // Toast notification
