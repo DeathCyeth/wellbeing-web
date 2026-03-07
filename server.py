@@ -12,7 +12,15 @@ import os
 import uuid
 import string
 import random
+import unicodedata
 from datetime import datetime
+
+
+def _norm(s):
+    """Normalize string for login/register: strip and NFKC so different devices match."""
+    if s is None:
+        return ''
+    return unicodedata.normalize('NFKC', str(s).strip())
 
 # OpenAI integration (optional - install with: pip install openai)
 try:
@@ -207,10 +215,10 @@ def health():
 
 @app.route('/api/users/login', methods=['POST'])
 def login():
-    """User login"""
-    data = request.get_json()
-    username = (data.get('username') or '').strip().lower()
-    password = (data.get('password') or '')
+    """User login. Normalizes username/password (strip + NFKC) so different devices match."""
+    data = request.get_json() or {}
+    username = _norm(data.get('username') or '').lower()
+    password = _norm(data.get('password') or '')
     
     if not username or not password:
         return jsonify({"error": "Username and password required"}), 400
@@ -218,10 +226,13 @@ def login():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT username, password, name, role, patient_id, age, sex FROM users WHERE username=? AND password=?",
-        (username, password)
+        "SELECT username, password, name, role, patient_id, age, sex FROM users WHERE username=?",
+        (username,)
     )
-    user = cursor.fetchone()
+    row = cursor.fetchone()
+    # Compare normalized passwords so stored (legacy) and input match across devices
+    stored_pass = (row[1] or '') if row and len(row) > 1 else ''
+    user = row if row and _norm(stored_pass) == password else None
     
     if user:
         # If patient doesn't have an ID, generate one
@@ -242,17 +253,20 @@ def login():
             "sex": user[6] if len(user) > 6 and user[6] else ""
         })
     else:
+        # Log for debugging cross-device login: does this username exist?
+        user_exists = row is not None
+        print(f"Login failed: username={username!r}, user_exists={user_exists} (check Render logs if cross-device)")
         conn.close()
         return jsonify({"error": "Invalid username or password"}), 401
 
 @app.route('/api/users', methods=['POST'])
 def create_user():
-    """Create a new user"""
-    data = request.get_json()
-    username = (data.get('username') or '').strip().lower()
-    password = data.get('password', '')
-    name = (data.get('name') or '').strip()
-    role = (data.get('role') or 'Patient').strip()
+    """Create a new user. Normalizes username/password (strip + NFKC) for cross-device login."""
+    data = request.get_json() or {}
+    username = _norm(data.get('username') or '').lower()
+    password = _norm(data.get('password') or '')
+    name = _norm(data.get('name') or '')
+    role = _norm(data.get('role') or 'Patient')
     
     if not all([username, password, name]):
         return jsonify({"error": "Username, password, and name are required"}), 400
