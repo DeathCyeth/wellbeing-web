@@ -2,7 +2,11 @@
 
 ## How it works today
 
-Your app calls **OpenAI’s API** (`/api/ai/advice` and `/api/ai/nutrition-plan` in **`server.py`**). The model answers from its **training data** plus the **context you send** (patient preferences, doctor notes, medical fields you store in the app). It does **not** browse the web or read PDFs like some clinical tools.
+Your app calls **OpenAI’s API** (`/api/ai/advice` and `/api/ai/nutrition-plan` in **`server.py`**). The model answers from its **training data** plus the **context you send** (patient preferences, doctor notes, medical fields you store in the app).
+
+**Optional:** If you set **`TAVILY_API_KEY`**, the server runs a **live web search** (Tavily) and injects real URLs into the prompt so the AI can cite **actual links** from those results only. See **`AI_WEB_SEARCH.md`**.
+
+Without that key, the model does **not** browse the web; it does not read your PDFs unless you add **RAG** later.
 
 So it is **not** the same as **DoxGPT-style** products that attach **specific documents** and cite **exact passages or links** from those documents. To get that behavior you would need **retrieval (RAG)**: upload/index guidelines, then pass retrieved chunks into the prompt with citations.
 

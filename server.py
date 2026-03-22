@@ -1022,12 +1022,54 @@ def update_medical_info(username):
 AI_CITATION_RULE_DOCTOR = """Citation rule (applies to EVERY reply, no exceptions—including brief answers, follow-ups, and clarifications):
 After your main answer, always add a section with this exact heading on its own line:
 **Supporting references**
-Then at least 2 bullet points. Each bullet should name a type of authoritative source (e.g. ADA Standards of Care, WHO nutrition guidance, NHS Eat Well, NIH MedlinePlus topic, USDA Dietary Guidelines, AHA dietary guidance). Match bullets to the topic you discussed. If the reply is only restating patient data from context, include one bullet: "Patient-specific details as supplied in the conversation context" and still add at least one general guideline reference. Do not invent URLs, DOIs, or page numbers; do not claim you opened a specific webpage."""
+Then at least 2 bullet points. If a system message in this request contains "Web search results", you MUST include at least one bullet with a markdown link [source title](url) for any web information you used—copy URLs EXACTLY from the "URL:" lines in that block only. You may add other bullets naming guideline bodies (ADA, WHO, NHS, etc.) without URLs when not from web results. If there is no web search block, do not invent URLs—name organizations/topics only. If the reply is only restating patient data from context, include one bullet noting patient context and still add guideline-style references."""
 
 AI_CITATION_RULE_PATIENT = """Citation rule (applies to EVERY reply, no exceptions—including short answers and follow-ups):
 After your main answer, always add a section with this exact heading on its own line:
 **Supporting references**
-Then at least 2 bullet points naming general health or nutrition guidance sources by organization and topic (e.g. WHO healthy diet; AHA healthy eating). If your answer relied mainly on this user's preferences, doctor notes, or medical fields from the app, include one bullet: "Personalized using information from your profile and care team as entered in this app" and add at least one general reference. Do not invent links or URLs."""
+At least 2 bullet points. If a system message contains "Web search results", include markdown links [title](url) using ONLY URLs copied exactly from that block for web-based information. If there is no web search block, name sources by organization/topic only—do not invent URLs. If you relied mainly on profile/notes from this app, say so in one bullet and add general references."""
+
+
+def tavily_web_search(query: str, max_results: int = 6):
+    """
+    Search the web via Tavily (https://tavily.com). Set TAVILY_API_KEY in the environment.
+    Returns a plain-text block for the model, or None if disabled / error.
+    """
+    api_key = os.environ.get('TAVILY_API_KEY')
+    if not api_key or not query or len(query.strip()) < 4:
+        return None
+    if os.environ.get('AI_WEB_SEARCH', '1').strip().lower() in ('0', 'false', 'no', 'off'):
+        return None
+    try:
+        import httpx
+        resp = httpx.post(
+            'https://api.tavily.com/search',
+            json={
+                'api_key': api_key,
+                'query': query.strip()[:500],
+                'search_depth': 'basic',
+                'max_results': max_results,
+                'include_answer': False,
+            },
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get('results') or []
+        if not results:
+            return None
+        lines = ['--- Web search results (use only these URLs when linking) ---']
+        for i, r in enumerate(results, 1):
+            title = (r.get('title') or 'Source')[:220]
+            url = (r.get('url') or '').strip()
+            content = (r.get('content') or '')[:700]
+            if not url:
+                continue
+            lines.append(f'[{i}] {title}\nURL: {url}\n{content}\n')
+        return '\n'.join(lines) if len(lines) > 1 else None
+    except Exception as e:
+        print(f'Tavily web search error: {e}')
+        return None
 
 
 @app.route('/api/ai/advice', methods=['POST'])
@@ -1127,6 +1169,21 @@ Recent Doctor Notes:
 
 Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context. You must always follow the citation rule from the previous system message."""
                 messages.append({"role": "system", "content": system_prompt})
+
+        # Optional live web search (Tavily): inject real pages + URLs for this question
+        skip_search = image and str(image).startswith('data:image')
+        if not skip_search and os.environ.get('TAVILY_API_KEY'):
+            web_block = tavily_web_search(question)
+            if web_block:
+                messages.append({
+                    'role': 'system',
+                    'content': (
+                        'The following is from a live web search for the user\'s latest question. '
+                        'Prefer this for current facts when it helps. In **Supporting references**, include '
+                        'markdown links [title](url) using ONLY the URLs from the lines starting with "URL:" below—copy them exactly.\n\n'
+                        + web_block
+                    ),
+                })
         
         # Add conversation history (user messages may include image - use content array for vision)
         for msg in conversation_history:
@@ -1259,6 +1316,20 @@ def generate_nutrition_plan():
         if notes_txt:
             ctx_parts.append("Recent doctor notes:\n" + notes_txt)
         context = "\n".join(ctx_parts)
+
+        web_extra = ""
+        if os.environ.get('TAVILY_API_KEY') and os.environ.get('AI_WEB_SEARCH', '1').strip().lower() not in ('0', 'false', 'no', 'off'):
+            qparts = ['nutrition dietary guidelines healthy eating']
+            if med[9]:
+                qparts.append(str(med[9]))
+            if med[10]:
+                qparts.append(str(med[10]))
+            if med[2]:
+                qparts.append(str(med[2]))
+            wb = tavily_web_search(' '.join(qparts)[:500], max_results=5)
+            if wb:
+                web_extra = '\n\n' + wb + '\n\n(If you use information from the web block above, the references string must include the exact https URLs from the URL: lines.)'
+
         prompt = f"""Generate a personalized nutrition plan for this patient. Use ONLY the information below. Return a JSON object with exactly these keys (all strings; for arrays use JSON arrays of strings):
 
 - maintenance_calories: e.g. "2000"
@@ -1273,10 +1344,11 @@ def generate_nutrition_plan():
 - day3_breakfast, day3_lunch, day3_dinner: meal descriptions (must NOT contain any foods from the patient's dislikes)
 - grocery_produce, grocery_grains, grocery_proteins, grocery_fats_extras: arrays of 5 items each (must NOT include any foods from the patient's dislikes)
 - smart_goal: one short SMART goal sentence
-- references: string listing 3–6 named guideline or educational sources relevant to this plan (e.g. "USDA Dietary Guidelines; ADA Standards of Care (nutrition); WHO healthy diet"). No fake URLs. Use "—" only if truly not applicable.
+- references: string with 3–6 items: if web search results appear below, include exact https URLs from those results plus named guidelines; otherwise named sources only (no invented URLs).
 
 Patient context:
 {context}
+{web_extra}
 
 Return only valid JSON, no other text. Use the patient's age, sex, weight, goals, allergies, and activity to set realistic numbers. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
 

@@ -1,7 +1,7 @@
 # AI Companion Setup
 
 ## Where to edit prompts & references
-See **`AI_SOURCES.md`** for where the AI gets context, how to change system prompts in `server.py`, and how **Supporting references** differ from tools like DoxGPT.
+See **`AI_SOURCES.md`**. For **live web search** and **real URL citations**, set **`TAVILY_API_KEY`** — see **`AI_WEB_SEARCH.md`**.
 
 ## Overview
 The AI Companion uses OpenAI's GPT-3.5-turbo to provide personalized wellbeing advice based on:
