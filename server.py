@@ -1087,7 +1087,11 @@ def get_ai_advice():
         messages = []
         if len(conversation_history) == 0:
             if role == 'doctor':
-                system_prompt = """You are an AI assistant helping a doctor in their wellbeing practice. Be professional, concise, and accurate. You can answer questions about nutrition, patient care, general health, and wellbeing. If the doctor provides context about a loaded patient, use it to give relevant advice. Do not make up patient data."""
+                system_prompt = """You are an AI assistant helping a doctor in their wellbeing practice. Be professional, concise, and accurate. You can answer questions about nutrition, patient care, general health, and wellbeing. If the doctor provides context about a loaded patient, use it to give relevant advice. Do not make up patient data.
+
+When your answer relies on general clinical, dietary, or public-health guidance, end with a short section titled exactly:
+**Supporting references**
+List 2–5 bullet points naming the type of source (e.g. major guideline bodies, topic areas such as diabetes nutrition, physical activity guidelines). Use real organization or guideline names where appropriate (e.g. ADA, WHO, NHS, NIH, USDA Dietary Guidelines). Do not invent URLs or claim you opened a specific webpage; these are educational pointers for the clinician to verify independently."""
                 if patient_context:
                     system_prompt += f"\n\nCurrent patient context (if the question is about this patient):\n{patient_context}"
                 messages.append({"role": "system", "content": system_prompt})
@@ -1107,7 +1111,11 @@ Doctor-recorded information (use this to personalize advice and avoid conflictin
 Recent Doctor Notes:
 {notes_context if notes_context else 'No notes available'}
 
-Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context."""
+Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context.
+
+When your answer relies on general health or nutrition guidance (not only the patient's own notes), end with a short section titled exactly:
+**Supporting references**
+List 2–4 bullet points naming guideline or educational sources by topic and organization (e.g. heart-healthy eating — AHA; general diet patterns — WHO). Do not invent links or URLs; these are suggestions for further reading the user can discuss with their doctor."""
                 messages.append({"role": "system", "content": system_prompt})
         
         # Add conversation history (user messages may include image - use content array for vision)
@@ -1152,7 +1160,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
         completion = client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=500,
+            max_tokens=800,
             temperature=0.7
         )
         
@@ -1255,7 +1263,7 @@ def generate_nutrition_plan():
 - day3_breakfast, day3_lunch, day3_dinner: meal descriptions (must NOT contain any foods from the patient's dislikes)
 - grocery_produce, grocery_grains, grocery_proteins, grocery_fats_extras: arrays of 5 items each (must NOT include any foods from the patient's dislikes)
 - smart_goal: one short SMART goal sentence
-- references: optional short note or "—"
+- references: string listing 3–6 named guideline or educational sources relevant to this plan (e.g. "USDA Dietary Guidelines; ADA Standards of Care (nutrition); WHO healthy diet"). No fake URLs. Use "—" only if truly not applicable.
 
 Patient context:
 {context}
