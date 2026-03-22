@@ -29,8 +29,12 @@ async function initializeApp() {
             showScreen('loginScreen');
         }
     } else {
-        console.log('No saved user, showing login screen');
-        showScreen('loginScreen');
+        // Support #register so QR code / link can open registration directly
+        if (window.location.hash === '#register') {
+            showScreen('registerScreen');
+        } else {
+            showScreen('loginScreen');
+        }
     }
 
     // Initialize API connection (non-blocking)
@@ -44,7 +48,10 @@ async function initializeApp() {
     
     // Add connection test button to login screen
     addConnectionTestButton();
-    
+    // If user lands with #register, show register screen (e.g. from QR scan)
+    window.addEventListener('hashchange', function () {
+        if (!currentUser && window.location.hash === '#register') showScreen('registerScreen');
+    });
     console.log('App initialization complete');
 }
 
@@ -1475,6 +1482,34 @@ async function showDoctorHome() {
     document.getElementById('doctorPatientInfo').style.display = 'none';
     document.getElementById('doctorPatientUsername').value = '';
     window.doctorCurrentPatientContext = '';
+    // Set patient sign-up QR code to current site + #register (so scan opens registration)
+    var registerUrl = window.location.origin + (window.location.pathname || '/') + '#register';
+    if (!window.location.pathname || window.location.pathname === '/') registerUrl = window.location.origin + '/#register';
+    var qrContainer = document.getElementById('doctorQRCodeContainer');
+    var qrUrlEl = document.getElementById('doctorQRCodeUrl');
+    if (qrUrlEl) qrUrlEl.textContent = registerUrl;
+    if (qrContainer) {
+        qrContainer.innerHTML = '';
+        if (typeof QRCode !== 'undefined') {
+            try {
+                new QRCode(qrContainer, { text: registerUrl, width: 200, height: 200 });
+            } catch (e) {
+                var img = document.createElement('img');
+                img.alt = 'Scan to create account';
+                img.width = 200;
+                img.height = 200;
+                img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(registerUrl);
+                qrContainer.appendChild(img);
+            }
+        } else {
+            var img = document.createElement('img');
+            img.alt = 'Scan to create account';
+            img.width = 200;
+            img.height = 200;
+            img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(registerUrl);
+            qrContainer.appendChild(img);
+        }
+    }
     await loadDoctorPatientList();
 }
 

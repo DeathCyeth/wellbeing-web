@@ -1,11 +1,12 @@
-# Fix cross-device login: use one shared database (PostgreSQL)
+# Fix: accounts not saving long-term / cross-device login (PostgreSQL)
 
-If logging in works on one device (e.g. laptop) but not on another (e.g. tablet) **even with the same username and password**, the app is almost certainly using **different data** on each request. That happens when:
+**"My account disappeared" or "I have to create the same account again"**  
+On Render, the app stores accounts in a **SQLite file on the server’s disk**. That disk is **ephemeral**: when the service restarts or you redeploy, the container is recreated and the database file is **reset to empty**. So accounts don’t persist across redeploys or restarts. No code change “cleared” them—the container (and its SQLite file) was recreated.
 
-- Each Render instance has its own SQLite file, or
-- The SQLite file is reset on redeploy/restart
+**"Login works on my laptop but not on my tablet"**  
+That can happen when each request hits a different instance (each with its own SQLite file) or when the DB was reset so the account no longer exists.
 
-**Fix:** Use a **single shared database** so every device and every request see the same users.
+**Fix:** Use a **PostgreSQL database** on Render. The app already supports it: one shared, persistent database so accounts **save long-term** and work on **all devices**.
 
 ---
 

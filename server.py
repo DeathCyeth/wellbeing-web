@@ -1018,6 +1018,18 @@ def update_medical_info(username):
     conn.close()
     return jsonify({"message": "Medical information updated successfully"})
 
+# Every AI reply must include citations (prepended as first system message on every request)
+AI_CITATION_RULE_DOCTOR = """Citation rule (applies to EVERY reply, no exceptions—including brief answers, follow-ups, and clarifications):
+After your main answer, always add a section with this exact heading on its own line:
+**Supporting references**
+Then at least 2 bullet points. Each bullet should name a type of authoritative source (e.g. ADA Standards of Care, WHO nutrition guidance, NHS Eat Well, NIH MedlinePlus topic, USDA Dietary Guidelines, AHA dietary guidance). Match bullets to the topic you discussed. If the reply is only restating patient data from context, include one bullet: "Patient-specific details as supplied in the conversation context" and still add at least one general guideline reference. Do not invent URLs, DOIs, or page numbers; do not claim you opened a specific webpage."""
+
+AI_CITATION_RULE_PATIENT = """Citation rule (applies to EVERY reply, no exceptions—including short answers and follow-ups):
+After your main answer, always add a section with this exact heading on its own line:
+**Supporting references**
+Then at least 2 bullet points naming general health or nutrition guidance sources by organization and topic (e.g. WHO healthy diet; AHA healthy eating). If your answer relied mainly on this user's preferences, doctor notes, or medical fields from the app, include one bullet: "Personalized using information from your profile and care team as entered in this app" and add at least one general reference. Do not invent links or URLs."""
+
+
 @app.route('/api/ai/advice', methods=['POST'])
 def get_ai_advice():
     """Get AI advice using OpenAI with conversation memory"""
@@ -1083,15 +1095,17 @@ def get_ai_advice():
             med_parts.append(f"- Activity level: {med.get('activity_level', '')}")
         medical_context = "\n".join(med_parts) if med_parts else "None recorded."
         
-        # Create system prompt (only on first message)
+        # Citation rule on every request so follow-up messages also include references
         messages = []
+        if role == 'doctor':
+            messages.append({"role": "system", "content": AI_CITATION_RULE_DOCTOR})
+        else:
+            messages.append({"role": "system", "content": AI_CITATION_RULE_PATIENT})
+
+        # Full context system prompt (first message in thread only)
         if len(conversation_history) == 0:
             if role == 'doctor':
-                system_prompt = """You are an AI assistant helping a doctor in their wellbeing practice. Be professional, concise, and accurate. You can answer questions about nutrition, patient care, general health, and wellbeing. If the doctor provides context about a loaded patient, use it to give relevant advice. Do not make up patient data.
-
-When your answer relies on general clinical, dietary, or public-health guidance, end with a short section titled exactly:
-**Supporting references**
-List 2–5 bullet points naming the type of source (e.g. major guideline bodies, topic areas such as diabetes nutrition, physical activity guidelines). Use real organization or guideline names where appropriate (e.g. ADA, WHO, NHS, NIH, USDA Dietary Guidelines). Do not invent URLs or claim you opened a specific webpage; these are educational pointers for the clinician to verify independently."""
+                system_prompt = """You are an AI assistant helping a doctor in their wellbeing practice. Be professional, concise, and accurate. You can answer questions about nutrition, patient care, general health, and wellbeing. If the doctor provides context about a loaded patient, use it to give relevant advice. Do not make up patient data. You must always follow the citation rule from the previous system message."""
                 if patient_context:
                     system_prompt += f"\n\nCurrent patient context (if the question is about this patient):\n{patient_context}"
                 messages.append({"role": "system", "content": system_prompt})
@@ -1111,11 +1125,7 @@ Doctor-recorded information (use this to personalize advice and avoid conflictin
 Recent Doctor Notes:
 {notes_context if notes_context else 'No notes available'}
 
-Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context.
-
-When your answer relies on general health or nutrition guidance (not only the patient's own notes), end with a short section titled exactly:
-**Supporting references**
-List 2–4 bullet points naming guideline or educational sources by topic and organization (e.g. heart-healthy eating — AHA; general diet patterns — WHO). Do not invent links or URLs; these are suggestions for further reading the user can discuss with their doctor."""
+Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context. You must always follow the citation rule from the previous system message."""
                 messages.append({"role": "system", "content": system_prompt})
         
         # Add conversation history (user messages may include image - use content array for vision)
@@ -1160,7 +1170,7 @@ List 2–4 bullet points naming guideline or educational sources by topic and or
         completion = client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=800,
+            max_tokens=950,
             temperature=0.7
         )
         

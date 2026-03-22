@@ -219,6 +219,19 @@
             </button>
         </div>
         <div class="container">
+            <!-- Patient sign-up QR: scan to open registration on phone -->
+            <div class="card" id="doctorPatientSignupCard">
+                <h3>Patient sign-up</h3>
+                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Patients can scan this QR code to open the app and create their account.</p>
+                <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                    <div id="doctorQRCodeContainer" style="flex-shrink: 0; min-width: 200px; min-height: 200px; background: #fff; border-radius: 8px; padding: 8px; border: 1px solid #e0e0e0;"></div>
+                    <div style="flex: 1; min-width: 200px;">
+                        <p style="margin: 0 0 8px 0; font-size: 0.95rem;">Scan with your phone camera to open the sign-up page.</p>
+                        <p style="margin: 0; font-size: 0.85rem; color: var(--text-light);" id="doctorQRCodeUrl"></p>
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="form-group">
                     <label for="doctorPatientSelect">Select patient</label>
@@ -417,6 +430,7 @@
         <button onclick="document.getElementById('debugPanel').style.display='none'" style="margin-top: 5px; padding: 5px;">Close</button>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="api-service.js?v=4.0"></script>
     <script src="app.js?v=4.0"></script>
     <script>

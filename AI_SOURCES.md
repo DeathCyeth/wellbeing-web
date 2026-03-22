@@ -17,9 +17,13 @@ So it is **not** the same as **DoxGPT-style** products that attach **specific do
 
 After editing, **restart** the server locally or **redeploy** on Render.
 
+## Citations on every reply
+
+`server.py` sends a **first system message on every API call** (`AI_CITATION_RULE_DOCTOR` / `AI_CITATION_RULE_PATIENT`) so **every** assistant answer—including short replies and follow-ups—must end with **`Supporting references`** (at least 2 bullets). Edit those constants near `get_ai_advice` to change wording or requirements.
+
 ## “Supporting references” (like DoxGPT *in spirit*)
 
-The prompts now ask the model to add a section:
+The model is instructed to add a section:
 
 - **`Supporting references`** (patient & doctor chat): short bullets naming **real guideline organizations or topic areas** (e.g. ADA, WHO, NHS). The model must **not** invent URLs or claim it opened a specific page.
 - **`references`** (nutrition plan JSON): a string of named sources relevant to the plan.
