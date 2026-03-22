@@ -1147,7 +1147,7 @@ function updateConversationDisplay() {
         } else if (msg.role === 'assistant') {
             html += `
                 <div class="ai-message ai-assistant-message">
-                    <strong>AI:</strong> ${escapeHtml(msg.content).replace(/\n/g, '<br>')}
+                    <strong>AI:</strong> ${formatAssistantMessageHtml(msg.content)}
                 </div>
             `;
         }
@@ -1325,9 +1325,9 @@ function renderNutritionPlanFormatted(plan) {
   <div class="np-smart-line">${escapeHtml(str(plan.smart_goal))}</div>
 </div>
 
-<div class="np-section">
+<div class="np-section np-references">
   <div class="np-subhead">References:</div>
-  <p>${escapeHtml(str(plan.references))}</p>
+  <p class="np-references-body">${formatAssistantMessageHtml(str(plan.references))}</p>
 </div>`;
     return html;
 }
@@ -1425,14 +1425,16 @@ function updateDoctorAIDisplay() {
     const el = document.getElementById('doctorAIResponse');
     if (!el) return;
     if (doctorAIConversationHistory.length === 0) {
-        el.textContent = '';
+        el.innerHTML = '';
         return;
     }
-    const parts = doctorAIConversationHistory.map(msg => {
-        if (msg.role === 'user') return `You: ${(msg.content || '').replace(/\n/g, ' ')}`;
-        return `AI: ${(msg.content || '').replace(/\n/g, ' ')}`;
+    const blocks = doctorAIConversationHistory.map(function (msg) {
+        if (msg.role === 'user') {
+            return '<div class="doctor-ai-line doctor-ai-user-line"><strong>You:</strong> ' + escapeHtml(msg.content || '').replace(/\n/g, '<br>') + '</div>';
+        }
+        return '<div class="doctor-ai-line doctor-ai-assistant-line"><strong>AI:</strong> ' + formatAssistantMessageHtml(msg.content || '') + '</div>';
     });
-    el.innerHTML = parts.join('\n\n').replace(/\n/g, '<br>');
+    el.innerHTML = blocks.join('');
 }
 
 async function sendDoctorAIMessage() {
@@ -2037,5 +2039,42 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/**
+ * Turn assistant text into safe HTML: escape first, then markdown links [label](url) -> <a>.
+ * Only http/https URLs allowed. Then linkify bare https? URLs outside of <a> tags. Newlines -> <br>.
+ */
+function formatAssistantMessageHtml(text) {
+    if (text == null || text === '') return '';
+    let s = escapeHtml(String(text));
+    s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, function (_m, label, url) {
+        try {
+            const u = new URL(url);
+            if (u.protocol !== 'http:' && u.protocol !== 'https:') return _m;
+            const href = u.href.replace(/"/g, '&quot;');
+            return '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+        } catch (e) {
+            return _m;
+        }
+    });
+    const parts = s.split(/(<a\s[^>]*>[\s\S]*?<\/a>)/gi);
+    s = parts.map(function (chunk) {
+        if (/^<a\s/i.test(chunk)) return chunk;
+        return chunk.replace(/(https?:\/\/[^\s<]+)/gi, function (raw) {
+            try {
+                const m = raw.match(/^(https?:\/\/[^\s<]+?)([),.;]+)$/i);
+                let url = m ? m[1] : raw;
+                const trailing = m ? m[2] : '';
+                const u = new URL(url);
+                if (u.protocol !== 'http:' && u.protocol !== 'https:') return raw;
+                const href = u.href.replace(/"/g, '&quot;');
+                return '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + url + '</a>' + trailing;
+            } catch (e) {
+                return raw;
+            }
+        });
+    }).join('');
+    return s.replace(/\n/g, '<br>');
 }
 

@@ -828,6 +828,25 @@ body {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
+.ai-assistant-message a,
+.doctor-ai-assistant-line a {
+    color: var(--primary-dark);
+    text-decoration: underline;
+    font-weight: 500;
+    word-break: break-all;
+}
+
+.ai-assistant-message a:hover,
+.doctor-ai-assistant-line a:hover {
+    color: var(--primary-color);
+}
+
+.doctor-ai-line {
+    margin-bottom: 12px;
+    line-height: 1.6;
+    word-wrap: break-word;
+}
+
 .ai-error {
     background: #ffe0e0;
     color: var(--error-color);
@@ -1007,6 +1026,11 @@ select:focus {
 .nutrition-plan-print .np-list li::before { content: "•"; position: absolute; left: 0; font-weight: bold; }
 .nutrition-plan-print .np-subhead { font-weight: 600; margin: 10px 0 6px 0; color: #333; }
 .nutrition-plan-print .np-smart-line { border-bottom: 1px solid #333; min-height: 24px; padding: 4px 0; }
+.nutrition-plan-print .np-references-body a {
+    color: #1565c0;
+    text-decoration: underline;
+    word-break: break-all;
+}
 
 @media print {
     body * { visibility: hidden; }
