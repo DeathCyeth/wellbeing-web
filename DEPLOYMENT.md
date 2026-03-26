@@ -74,7 +74,27 @@ If you prefer the frontend on one host and the backend on another:
 ## Notes
 
 - **Free tier:** On Render’s free tier, the app may spin down after inactivity. The first request after that can take 30–60 seconds to wake up.
-- **Database:** The app uses SQLite (`wellbeing.db`). On Render’s free tier the filesystem is ephemeral, so the database can be reset on redeploys or restarts. For persistent data, use a hosted database (e.g. PostgreSQL on Render) and change the app to use it; for a demo or light use, the current setup is fine.
+- **Why everyone needs new accounts after each deploy:** Accounts are stored in the **server** database, not only in the browser. With the default **SQLite** file (`wellbeing.db`) on Render (and many similar hosts), the container filesystem is **ephemeral** — each new deploy or fresh instance starts with an **empty** database. The app may still show an old name in the browser from `localStorage`, but login will fail until you register again. **Fix:** use a persistent database (recommended below).
+
+### Persistent accounts (PostgreSQL — recommended)
+
+1. In the Render dashboard, create a **PostgreSQL** instance (free or paid).
+2. Copy its **Internal Database URL** (starts with `postgresql://`).
+3. On your **Web** service → **Environment**, add:
+   - **Key:** `DATABASE_URL`  
+   - **Value:** the internal URL (Render often provides this automatically if you link the DB to the service).
+4. Redeploy. The server already uses PostgreSQL when `DATABASE_URL` is set; tables are created on startup. Existing SQLite data on the server is not migrated automatically — register once after switching, or export/import manually if you need old rows.
+
+### Persistent accounts (SQLite on a disk)
+
+If you prefer SQLite, attach a **persistent disk** on Render, mount it (e.g. `/data`), and set:
+
+- **Key:** `SQLITE_DATABASE_PATH`  
+- **Value:** `/data/wellbeing.db` (must be on the mounted volume)
+
+Without this, SQLite stays on ephemeral storage and is wiped on redeploy.
+
+- **Health check:** `GET /api/health` returns `database` (`sqlite` or `postgresql`) and, for SQLite, `sqlite_path` so you can confirm where the file lives in logs.
 - **AI features:** If you use the in-app AI, set `OPENAI_API_KEY` in the environment (e.g. in Render’s Environment tab). If it’s not set, the rest of the app still works; only AI endpoints will return an error.
 - **Local testing:** You can still run everything locally with `python server.py` and open `http://localhost:8000`. The frontend will use `/api` on that same origin.
 

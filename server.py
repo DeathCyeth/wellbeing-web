@@ -34,12 +34,17 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Database: SQLite by default, or PostgreSQL when DATABASE_URL is set (fixes cross-device login)
-DB_NAME = "wellbeing.db"
+# Database: SQLite by default, or PostgreSQL when DATABASE_URL is set (persists across redeploys on the host).
+# On Render/Fly/similar, default SQLite lives on an ephemeral disk — set DATABASE_URL (Postgres) or
+# SQLITE_DATABASE_PATH to a file on a mounted persistent disk (e.g. /data/wellbeing.db).
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)  # psycopg2 expects postgresql://
 USE_PG = bool(DATABASE_URL and 'postgresql' in DATABASE_URL.lower())
+SQLITE_DATABASE_PATH = os.environ.get(
+    'SQLITE_DATABASE_PATH',
+    os.environ.get('SQLITE_PATH', 'wellbeing.db'),
+)
 
 def get_conn():
     if USE_PG:
@@ -48,7 +53,7 @@ def get_conn():
             return psycopg2.connect(DATABASE_URL)
         except ImportError:
             pass
-    return sqlite3.connect(DB_NAME)
+    return sqlite3.connect(SQLITE_DATABASE_PATH)
 
 def _run_execute_impl(cursor, sql, params=None):
     if params is None:
@@ -257,7 +262,10 @@ def _empty_medical_info(sex_default=""):
 @app.route('/api/health', methods=['GET'])
 def health():
     """Health check endpoint. instance_id: same on laptop & tablet = same server; different = different DB."""
-    return jsonify({"status": "ok", "instance_id": INSTANCE_ID})
+    payload = {"status": "ok", "instance_id": INSTANCE_ID, "database": "postgresql" if USE_PG else "sqlite"}
+    if not USE_PG:
+        payload["sqlite_path"] = os.path.abspath(SQLITE_DATABASE_PATH)
+    return jsonify(payload)
 
 @app.route('/api/users/login', methods=['POST'])
 def login():
@@ -1390,6 +1398,12 @@ def serve_static(filename):
 
 # Initialize database when app is loaded (needed when running under gunicorn on Render)
 init_db()
+if USE_PG:
+    print("Database: PostgreSQL (DATABASE_URL) — user data persists with the hosted database.")
+else:
+    _abs_sqlite = os.path.abspath(SQLITE_DATABASE_PATH)
+    print(f"Database: SQLite file at {_abs_sqlite}")
+    print("If accounts disappear after each deploy, use PostgreSQL (DATABASE_URL) or a persistent disk + SQLITE_DATABASE_PATH.")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
@@ -1397,7 +1411,7 @@ if __name__ == '__main__':
     print("=" * 50)
     print("Wellbeing Companion Backend Server")
     print("=" * 50)
-    print(f"Database: {DB_NAME}")
+    print(f"Database: PostgreSQL" if USE_PG else f"Database: SQLite ({os.path.abspath(SQLITE_DATABASE_PATH)})")
     print(f"Server starting on http://0.0.0.0:{port}")
     print(f"API Base URL: http://0.0.0.0:{port}/api")
     print("=" * 50)
