@@ -264,10 +264,29 @@ def _empty_medical_info(sex_default=""):
     }
 
 
+def _sqlite_likely_ephemeral_host():
+    """True if we guess SQLite data may be wiped on redeploy (e.g. Render without a persistent disk)."""
+    if USE_PG:
+        return False
+    if os.environ.get('SQLITE_PERSISTENT', '').strip().lower() in ('1', 'true', 'yes'):
+        return False
+    path = os.path.abspath(SQLITE_DATABASE_PATH).replace('\\', '/')
+    for prefix in ('/data/', '/var/data/', '/mnt/'):
+        if path.startswith(prefix):
+            return False
+    return bool(os.environ.get('RENDER'))
+
+
 @app.route('/api/health', methods=['GET'])
 def health():
     """Health check endpoint. instance_id: same on laptop & tablet = same server; different = different DB."""
-    payload = {"status": "ok", "instance_id": INSTANCE_ID, "database": "postgresql" if USE_PG else "sqlite"}
+    payload = {
+        "status": "ok",
+        "instance_id": INSTANCE_ID,
+        "database": "postgresql" if USE_PG else "sqlite",
+        "user_data_persists": USE_PG or not _sqlite_likely_ephemeral_host(),
+        "ephemeral_data_warning": _sqlite_likely_ephemeral_host(),
+    }
     if not USE_PG:
         payload["sqlite_path"] = os.path.abspath(SQLITE_DATABASE_PATH)
     return jsonify(payload)

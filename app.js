@@ -235,6 +235,24 @@ function toggleCollapsible(id) {
     }
 }
 
+function refreshLoginHealthHints() {
+    var hintEl = document.getElementById('loginSiteHint');
+    var warnEl = document.getElementById('loginPersistenceWarning');
+    if (warnEl) {
+        warnEl.style.display = 'none';
+        warnEl.textContent = '';
+    }
+    if (!hintEl || typeof apiService === 'undefined') return;
+    hintEl.textContent = "You're on: " + (window.location.hostname || window.location.host || '');
+    apiService.request('/health').then(function (r) {
+        if (r && r.instance_id && hintEl) hintEl.textContent = "You're on: " + (window.location.hostname || '') + " \u00B7 Server: " + r.instance_id;
+        if (r && r.ephemeral_data_warning && warnEl) {
+            warnEl.style.display = 'block';
+            warnEl.textContent = 'Server is using temporary database storage: user accounts and records can be reset when the host redeploys. Ask your admin to add PostgreSQL (DATABASE_URL on Render) or a persistent disk with SQLITE_DATABASE_PATH. This is not caused by app updates alone.';
+        }
+    }).catch(function () {});
+}
+
 // Screen navigation
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(screen => {
@@ -245,15 +263,7 @@ function showScreen(screenId) {
     if (screenId === 'loginScreen') {
         var errEl = document.getElementById('loginError');
         if (errEl) errEl.textContent = '';
-        var hintEl = document.getElementById('loginSiteHint');
-        if (hintEl) {
-            hintEl.textContent = "You're on: " + (window.location.hostname || window.location.host || '');
-            if (typeof apiService !== 'undefined') {
-                apiService.request('/health').then(function (r) {
-                    if (r && r.instance_id && hintEl) hintEl.textContent = "You're on: " + (window.location.hostname || '') + " \u00B7 Server: " + r.instance_id;
-                }).catch(function () {});
-            }
-        }
+        refreshLoginHealthHints();
     }
 }
 

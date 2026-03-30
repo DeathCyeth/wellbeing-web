@@ -73,8 +73,9 @@ If you prefer the frontend on one host and the backend on another:
 
 ## Notes
 
+- **If all users and data “vanished” after a deploy:** That is almost always the **host**, not a bad code update. The server stores accounts in **SQLite** or **PostgreSQL**. Default SQLite on Render lives on **ephemeral disk**, so **every redeploy starts with an empty file**. Your browser may still show an old name from `localStorage`, but the server no longer has that account. **Fix:** add **PostgreSQL** (`DATABASE_URL`) or mount a **persistent disk** and set `SQLITE_DATABASE_PATH` to a path on that disk (see below). If you use a persistent SQLite path outside those defaults, set `SQLITE_PERSISTENT=1` so the login-page warning stays off.
 - **Free tier:** On Render’s free tier, the app may spin down after inactivity. The first request after that can take 30–60 seconds to wake up.
-- **Why everyone needs new accounts after each deploy:** Accounts are stored in the **server** database, not only in the browser. With the default **SQLite** file (`wellbeing.db`) on Render (and many similar hosts), the container filesystem is **ephemeral** — each new deploy or fresh instance starts with an **empty** database. The app may still show an old name in the browser from `localStorage`, but login will fail until you register again. **Fix:** use a persistent database (recommended below).
+- **Why everyone needs new accounts after each deploy:** Same as above: with the default **SQLite** file (`wellbeing.db`) on Render (and many similar hosts), the container filesystem is **ephemeral** — each new deploy or fresh instance starts with an **empty** database. **Fix:** use a persistent database (recommended below).
 
 ### Persistent accounts (PostgreSQL — recommended)
 
