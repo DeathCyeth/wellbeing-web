@@ -31,6 +31,11 @@ except ImportError:
     print("Warning: OpenAI not installed. AI features will not work.")
     print("Install with: pip install openai")
 
+try:
+    from open_clinical_sources import gather_open_source_clinical_block
+except ImportError:
+    gather_open_source_clinical_block = None
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
@@ -1178,8 +1183,27 @@ Recent Doctor Notes:
 Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context. You must always follow the citation rule from the previous system message."""
                 messages.append({"role": "system", "content": system_prompt})
 
-        # Optional live web search (Tavily): inject real pages + URLs for this question
+        # PubMed (NLM) + openFDA: open public clinical text (no vendor key required)
         skip_search = image and str(image).startswith('data:image')
+        use_open_sources = os.environ.get('AI_OPEN_SOURCES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+        if gather_open_source_clinical_block and use_open_sources and not skip_search:
+            try:
+                os_clinical = gather_open_source_clinical_block(question)
+                if os_clinical:
+                    messages.append({
+                        'role': 'system',
+                        'content': (
+                            'The following excerpts come from open public data: PubMed (NLM) and/or openFDA (FDA). '
+                            'They are general reference only—not individualized medical advice. In **Supporting references**, '
+                            'include markdown links using ONLY the PubMed "URL:" lines below and/or the openFDA URL line given. '
+                            'Do not invent PMIDs or links.\n\n'
+                            + os_clinical
+                        ),
+                    })
+            except Exception as e:
+                print(f'Open clinical sources error: {e}')
+
+        # Optional live web search (Tavily): inject real pages + URLs for this question
         if not skip_search and os.environ.get('TAVILY_API_KEY'):
             web_block = tavily_web_search(question)
             if web_block:

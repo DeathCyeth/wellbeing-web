@@ -96,6 +96,11 @@ Without this, SQLite stays on ephemeral storage and is wiped on redeploy.
 
 - **Health check:** `GET /api/health` returns `database` (`sqlite` or `postgresql`) and, for SQLite, `sqlite_path` so you can confirm where the file lives in logs.
 - **AI features:** If you use the in-app AI, set `OPENAI_API_KEY` in the environment (e.g. in Render’s Environment tab). If it’s not set, the rest of the app still works; only AI endpoints will return an error.
+- **Open clinical data (PubMed + openFDA):** The advice endpoint can pull free, public literature and U.S. drug label excerpts (similar in spirit to clinician tools that ground answers in references). No API key is required. Optional env vars:
+  - `NCBI_EMAIL` — recommended by [NCBI E-utilities](https://www.ncbi.nlm.nih.gov/home/develop/api/) (any contact email for your app).
+  - `NCBI_API_KEY` — optional; raises PubMed rate limits (free [API key](https://ncbiinsights.ncbi.nlm.nih.gov/2017/11/02/new-api-keys-for-the-e-utilities/) from NCBI).
+  - `AI_OPEN_SOURCES` — set to `0` to disable PubMed/openFDA injection (default is on).
+- **Tavily (optional web search):** If you set `TAVILY_API_KEY`, the model also gets live web results. This is separate from PubMed/openFDA.
 - **Local testing:** You can still run everything locally with `python server.py` and open `http://localhost:8000`. The frontend will use `/api` on that same origin.
 
 ---
@@ -107,3 +112,4 @@ Without this, SQLite stays on ephemeral storage and is wiped on redeploy.
 | Run locally      | `python server.py` then open http://localhost:8000 |
 | Render start cmd | `gunicorn --bind 0.0.0.0:$PORT server:app` |
 | Set API key      | Env var `OPENAI_API_KEY` in Render dashboard |
+| PubMed / openFDA | Optional: `NCBI_EMAIL`, `NCBI_API_KEY`; disable with `AI_OPEN_SOURCES=0` |
