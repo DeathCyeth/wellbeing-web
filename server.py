@@ -13,6 +13,7 @@ import uuid
 import string
 import random
 import unicodedata
+import re
 from datetime import datetime
 
 
@@ -32,9 +33,17 @@ except ImportError:
     print("Install with: pip install openai")
 
 try:
-    from open_clinical_sources import gather_open_source_clinical_block
+    from open_clinical_sources import (
+        gather_open_source_clinical_block,
+        gather_open_source_clinical_bundle,
+        build_repository_pubmed_block,
+        pubmed_references_for_pmids,
+    )
 except ImportError:
     gather_open_source_clinical_block = None
+    gather_open_source_clinical_bundle = None
+    build_repository_pubmed_block = None
+    pubmed_references_for_pmids = None
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -189,6 +198,28 @@ def init_db():
             run_execute(cursor, f"ALTER TABLE patient_medical_info ADD COLUMN {col} {ctype}")
         except (sqlite3.OperationalError, Exception):
             pass
+
+    run_execute(cursor, """
+        CREATE TABLE IF NOT EXISTS literature_repository (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            patient_username TEXT,
+            pmid TEXT NOT NULL,
+            curator_note TEXT,
+            added_by TEXT,
+            created_at INTEGER NOT NULL
+        )
+    """)
+    try:
+        run_execute(cursor,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_lit_global_pmid ON literature_repository(pmid) WHERE scope = 'global'")
+    except (sqlite3.OperationalError, Exception):
+        pass
+    try:
+        run_execute(cursor,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_lit_patient_pmid ON literature_repository(patient_username, pmid) WHERE scope = 'patient'")
+    except (sqlite3.OperationalError, Exception):
+        pass
     conn.commit()
     conn.close()
 
@@ -234,6 +265,23 @@ def init_db_pg():
             chronic_conditions TEXT, weekly_food_budget TEXT, activity_level TEXT
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS literature_repository (
+            id SERIAL PRIMARY KEY,
+            scope VARCHAR(16) NOT NULL,
+            patient_username VARCHAR(255) REFERENCES users(username) ON DELETE CASCADE,
+            pmid VARCHAR(32) NOT NULL,
+            curator_note TEXT,
+            added_by VARCHAR(255),
+            created_at BIGINT NOT NULL
+        )
+    """)
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_lit_global_pmid ON literature_repository (pmid) WHERE scope = 'global'"
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_lit_patient_pmid ON literature_repository (patient_username, pmid) WHERE scope = 'patient'"
+    )
     conn.commit()
     conn.close()
     print("PostgreSQL tables initialized (shared DB for all devices)")
@@ -290,6 +338,193 @@ def health():
     if not USE_PG:
         payload["sqlite_path"] = os.path.abspath(SQLITE_DATABASE_PATH)
     return jsonify(payload)
+
+
+def _normalize_pmid(raw):
+    s = re.sub(r"\D", "", str(raw or ""))
+    if not s or len(s) > 12:
+        return None
+    return s
+
+
+def literature_ordered_pmids(patient_login_username: str, limit: int = 25):
+    """PubMed IDs from repository: global first, then patient-specific (deduped)."""
+    uname = _norm(patient_login_username).lower()
+    conn = get_conn()
+    cursor = conn.cursor()
+    out = []
+    seen = set()
+    run_execute(
+        cursor,
+        "SELECT pmid FROM literature_repository WHERE scope='global' ORDER BY created_at ASC",
+    )
+    for row in cursor.fetchall():
+        p = _normalize_pmid(row[0])
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+        if len(out) >= limit:
+            conn.close()
+            return out
+    if uname:
+        run_execute(
+            cursor,
+            "SELECT pmid FROM literature_repository WHERE scope='patient' AND LOWER(patient_username)=? ORDER BY created_at ASC",
+            (uname,),
+        )
+        for row in cursor.fetchall():
+            p = _normalize_pmid(row[0])
+            if p and p not in seen:
+                seen.add(p)
+                out.append(p)
+            if len(out) >= limit:
+                break
+    conn.close()
+    return out
+
+
+@app.route("/api/literature", methods=["GET"])
+def literature_list():
+    """Curated PubMed links: all global rows, plus patient-specific when ?patient_username=."""
+    patient_username = _norm(request.args.get("patient_username") or "").lower()
+    conn = get_conn()
+    cursor = conn.cursor()
+    items = []
+    run_execute(
+        cursor,
+        """SELECT id, scope, patient_username, pmid, curator_note, added_by, created_at
+           FROM literature_repository WHERE scope='global' ORDER BY created_at ASC""",
+    )
+    for row in cursor.fetchall():
+        items.append(
+            {
+                "id": row[0],
+                "scope": row[1],
+                "patient_username": row[2],
+                "pmid": row[3],
+                "curator_note": row[4],
+                "added_by": row[5],
+                "created_at": row[6],
+            }
+        )
+    if patient_username:
+        run_execute(
+            cursor,
+            """SELECT id, scope, patient_username, pmid, curator_note, added_by, created_at
+               FROM literature_repository WHERE scope='patient' AND LOWER(patient_username)=?
+               ORDER BY created_at ASC""",
+            (patient_username,),
+        )
+        for row in cursor.fetchall():
+            items.append(
+                {
+                    "id": row[0],
+                    "scope": row[1],
+                    "patient_username": row[2],
+                    "pmid": row[3],
+                    "curator_note": row[4],
+                    "added_by": row[5],
+                    "created_at": row[6],
+                }
+            )
+    conn.close()
+    return jsonify(items)
+
+
+@app.route("/api/literature", methods=["POST"])
+def literature_add():
+    data = request.get_json() or {}
+    scope = (data.get("scope") or "").strip().lower()
+    pmid = _normalize_pmid(data.get("pmid"))
+    if not pmid:
+        return jsonify({"error": "Valid PubMed ID (PMID) required"}), 400
+    if scope not in ("global", "patient"):
+        return jsonify({"error": "scope must be global or patient"}), 400
+    patient_username = None
+    if scope == "patient":
+        patient_username = _norm(data.get("patient_username") or "").lower()
+        if not patient_username:
+            return jsonify({"error": "patient_username required when scope is patient"}), 400
+        conn = get_conn()
+        cursor = conn.cursor()
+        run_execute(
+            cursor,
+            "SELECT username, role FROM users WHERE LOWER(username)=?",
+            (patient_username,),
+        )
+        prow = cursor.fetchone()
+        conn.close()
+        if not prow or str(prow[1] or "").lower() != "patient":
+            return jsonify({"error": "patient_username must be a registered patient account"}), 400
+    note = (data.get("curator_note") or "")[:2000]
+    added_by = _norm(data.get("added_by") or "")[:120]
+    ts = int(datetime.now().timestamp() * 1000)
+    conn = get_conn()
+    cursor = conn.cursor()
+    try:
+        if USE_PG:
+            cursor.execute(
+                """INSERT INTO literature_repository (scope, patient_username, pmid, curator_note, added_by, created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (
+                    scope,
+                    patient_username if scope == "patient" else None,
+                    pmid,
+                    note or None,
+                    added_by or None,
+                    ts,
+                ),
+            )
+            new_id = cursor.fetchone()[0]
+        else:
+            run_execute(
+                cursor,
+                """INSERT INTO literature_repository (scope, patient_username, pmid, curator_note, added_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    scope,
+                    patient_username if scope == "patient" else None,
+                    pmid,
+                    note or None,
+                    added_by or None,
+                    ts,
+                ),
+            )
+            new_id = cursor.lastrowid
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        err = str(e).lower()
+        if "unique" in err or "integrity" in err:
+            return jsonify({"error": "This PMID is already in the repository for that scope"}), 409
+        raise
+    finally:
+        conn.close()
+    return jsonify(
+        {
+            "id": new_id,
+            "scope": scope,
+            "patient_username": patient_username,
+            "pmid": pmid,
+            "curator_note": note,
+            "added_by": added_by,
+            "created_at": ts,
+        }
+    )
+
+
+@app.route("/api/literature/<int:item_id>", methods=["DELETE"])
+def literature_delete(item_id):
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(cursor, "DELETE FROM literature_repository WHERE id=?", (item_id,))
+    deleted = cursor.rowcount if hasattr(cursor, "rowcount") else 0
+    conn.commit()
+    conn.close()
+    if not deleted:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"message": "Removed"})
+
 
 @app.route('/api/users/login', methods=['POST'])
 def login():
@@ -1121,7 +1356,9 @@ def get_ai_advice():
     image = data.get('image')  # optional: data URL (base64) for current message
     role = data.get('role', '')  # 'doctor' = doctor assistant mode
     patient_context = data.get('patient_context', '')  # optional summary when doctor has patient loaded
-    
+    # Patient login username: links global + patient-specific PubMed repository into AI context
+    context_username = _norm(data.get('context_username') or '').lower()
+
     if not question and not image:
         return jsonify({"error": "Question or image is required"}), 400
     question = question or "What do you see in this image?"
@@ -1202,12 +1439,33 @@ Recent Doctor Notes:
 Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context. You must always follow the citation rule from the previous system message."""
                 messages.append({"role": "system", "content": system_prompt})
 
-        # PubMed (NLM) + openFDA: open public clinical text (no vendor key required)
+        # Curated literature repository (practice-wide + per-patient PMIDs)
         skip_search = image and str(image).startswith('data:image')
-        use_open_sources = os.environ.get('AI_OPEN_SOURCES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
-        if gather_open_source_clinical_block and use_open_sources and not skip_search:
+        repo_pmids = literature_ordered_pmids(context_username)
+        query_pmids = []
+        if build_repository_pubmed_block and repo_pmids and not skip_search:
             try:
-                os_clinical = gather_open_source_clinical_block(question)
+                repo_block = build_repository_pubmed_block(repo_pmids)
+                if repo_block:
+                    messages.append({
+                        'role': 'system',
+                        'content': (
+                            'Curated PubMed articles from your literature repository (practice-wide and/or this patient). '
+                            'Prioritize when relevant. In **Supporting references**, use markdown links with URLs from '
+                            'the "URL:" lines below. You may use the short citation form "Title (AuthorLast, Year)" when '
+                            'it matches these sources.\n\n' + repo_block
+                        ),
+                    })
+            except Exception as e:
+                print(f'Literature repository block error: {e}')
+
+        # PubMed (NLM) + openFDA: open public clinical text (no vendor key required)
+        use_open_sources = os.environ.get('AI_OPEN_SOURCES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+        if gather_open_source_clinical_bundle and use_open_sources and not skip_search:
+            try:
+                bundle = gather_open_source_clinical_bundle(question)
+                os_clinical = bundle.get('text_block')
+                query_pmids = bundle.get('query_pmids') or []
                 if os_clinical:
                     messages.append({
                         'role': 'system',
@@ -1240,10 +1498,10 @@ Provide helpful, personalized advice that takes into account the user's preferen
         for msg in conversation_history:
             if msg.get('role') not in ['user', 'assistant']:
                 continue
-            role = msg['role']
+            hist_role = msg['role']
             content = msg.get('content', '')
             img = msg.get('image')
-            if role == 'user' and img and str(img).startswith('data:image'):
+            if hist_role == 'user' and img and str(img).startswith('data:image'):
                 messages.append({
                     "role": "user",
                     "content": [
@@ -1252,7 +1510,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
                     ]
                 })
             else:
-                messages.append({"role": role, "content": content or ""})
+                messages.append({"role": hist_role, "content": content or ""})
         
         # Current user message (with optional image)
         if image and str(image).startswith('data:image'):
@@ -1283,8 +1541,23 @@ Provide helpful, personalized advice that takes into account the user's preferen
         )
         
         response_text = completion.choices[0].message.content
-        return jsonify({"response": response_text})
-        
+
+        all_pmids = []
+        seen_p = set()
+        for p in repo_pmids + query_pmids:
+            ps = str(p).strip()
+            if ps.isdigit() and ps not in seen_p:
+                seen_p.add(ps)
+                all_pmids.append(ps)
+        references = []
+        if pubmed_references_for_pmids and all_pmids:
+            try:
+                references = pubmed_references_for_pmids(all_pmids)
+            except Exception as e:
+                print(f'pubmed_references_for_pmids error: {e}')
+
+        return jsonify({"response": response_text, "references": references})
+
     except Exception as e:
         print(f"OpenAI API error: {str(e)}")
         return jsonify({"error": f"AI service error: {str(e)}"}), 500

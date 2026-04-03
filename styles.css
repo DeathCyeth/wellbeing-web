@@ -434,6 +434,40 @@ body {
     color: #92400e;
 }
 
+.ai-references-block {
+    margin-top: 12px;
+    padding: 12px 14px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    border-radius: 8px;
+    background: rgba(99, 102, 241, 0.06);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+}
+
+.ai-references-block ul {
+    margin: 8px 0 0 1.1rem;
+    padding: 0;
+}
+
+.ai-references-block li {
+    margin-bottom: 6px;
+}
+
+.lit-list .lit-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.9rem;
+}
+
+.lit-list .lit-row:last-child {
+    border-bottom: none;
+}
+
 /* Notes List */
 .note-item {
     background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);

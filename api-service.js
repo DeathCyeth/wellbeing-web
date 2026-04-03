@@ -307,7 +307,7 @@ class ApiService {
 
     // AI Companion with conversation history (medicalInfo = doctor-recorded data; image = optional base64/data URL for current message)
     // role = 'doctor' and patient_context for doctor-side AI
-    async getAIAdvice(question, userName, likes, dislikes, notes, conversationHistory = [], medicalInfo = {}, image = null, role = null, patientContext = '') {
+    async getAIAdvice(question, userName, likes, dislikes, notes, conversationHistory = [], medicalInfo = {}, image = null, role = null, patientContext = '', contextUsername = '') {
         const body = {
             question,
             user_name: userName || 'User',
@@ -320,7 +320,22 @@ class ApiService {
         if (image) body.image = image;
         if (role) body.role = role;
         if (patientContext) body.patient_context = patientContext;
+        if (contextUsername) body.context_username = contextUsername;
         return await this.request('/ai/advice', { method: 'POST', body });
+    }
+
+    /** Curated PubMed PMIDs: global + optional patient_username for patient-scoped rows */
+    async getLiterature(patientUsername) {
+        const q = patientUsername ? `?patient_username=${encodeURIComponent(patientUsername)}` : '';
+        return await this.request('/literature' + q);
+    }
+
+    async addLiterature(payload) {
+        return await this.request('/literature', { method: 'POST', body: payload });
+    }
+
+    async deleteLiterature(id) {
+        return await this.request('/literature/' + id, { method: 'DELETE' });
     }
 
     // Generate personalized nutrition plan for a patient (username or patient_id)

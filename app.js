@@ -1047,7 +1047,10 @@ window.getAIAdvice = async function getAIAdvice() {
             notes || [],
             historyForApi,
             medicalInfo,
-            imageDataUrl
+            imageDataUrl,
+            null,
+            '',
+            currentUser.username
         );
         
         console.log('AI API response:', aiResponse);
@@ -1074,8 +1077,12 @@ window.getAIAdvice = async function getAIAdvice() {
             loadingIndicator.remove();
         }
         
-        // Add AI response to conversation history
-        aiConversationHistory.push({ role: 'assistant', content: responseText });
+        // Add AI response to conversation history (structured PubMed refs from server)
+        aiConversationHistory.push({
+            role: 'assistant',
+            content: responseText,
+            references: (aiResponse && Array.isArray(aiResponse.references)) ? aiResponse.references : []
+        });
         
         // Update display
         updateConversationDisplay();
@@ -1155,9 +1162,11 @@ function updateConversationDisplay() {
                 </div>
             `;
         } else if (msg.role === 'assistant') {
+            const refsHtml = formatReferencesHtml(msg.references);
             html += `
                 <div class="ai-message ai-assistant-message">
                     <strong>AI:</strong> ${formatAssistantMessageHtml(msg.content)}
+                    ${refsHtml}
                 </div>
             `;
         }
@@ -1442,7 +1451,7 @@ function updateDoctorAIDisplay() {
         if (msg.role === 'user') {
             return '<div class="doctor-ai-line doctor-ai-user-line"><strong>You:</strong> ' + escapeHtml(msg.content || '').replace(/\n/g, '<br>') + '</div>';
         }
-        return '<div class="doctor-ai-line doctor-ai-assistant-line"><strong>AI:</strong> ' + formatAssistantMessageHtml(msg.content || '') + '</div>';
+        return '<div class="doctor-ai-line doctor-ai-assistant-line"><strong>AI:</strong> ' + formatAssistantMessageHtml(msg.content || '') + formatReferencesHtml(msg.references) + '</div>';
     });
     el.innerHTML = blocks.join('');
 }
@@ -1464,6 +1473,8 @@ async function sendDoctorAIMessage() {
     const patientContext = (typeof window.doctorCurrentPatientContext !== 'undefined') ? (window.doctorCurrentPatientContext || '') : '';
     const historyForApi = doctorAIConversationHistory.slice(0, -1).map(m => ({ role: m.role, content: m.content || '' }));
     try {
+        const litUser = (typeof window.doctorLoadedPatientUsername !== 'undefined' && window.doctorLoadedPatientUsername)
+            ? window.doctorLoadedPatientUsername : '';
         const res = await apiService.getAIAdvice(
             question,
             currentUser.name,
@@ -1472,10 +1483,15 @@ async function sendDoctorAIMessage() {
             {},
             null,
             'doctor',
-            patientContext
+            patientContext,
+            litUser
         );
         const text = (res && res.response) ? res.response : (typeof res === 'string' ? res : '');
-        doctorAIConversationHistory.push({ role: 'assistant', content: text });
+        doctorAIConversationHistory.push({
+            role: 'assistant',
+            content: text,
+            references: (res && Array.isArray(res.references)) ? res.references : []
+        });
         updateDoctorAIDisplay();
         if (responseEl) responseEl.scrollTop = responseEl.scrollHeight;
     } catch (e) {
@@ -1494,6 +1510,7 @@ async function showDoctorHome() {
     document.getElementById('doctorPatientInfo').style.display = 'none';
     document.getElementById('doctorPatientUsername').value = '';
     window.doctorCurrentPatientContext = '';
+    window.doctorLoadedPatientUsername = '';
     // Set patient sign-up QR code to current site + #register (so scan opens registration)
     var registerUrl = window.location.origin + (window.location.pathname || '/') + '#register';
     if (!window.location.pathname || window.location.pathname === '/') registerUrl = window.location.origin + '/#register';
@@ -1523,7 +1540,125 @@ async function showDoctorHome() {
         }
     }
     await loadDoctorPatientList();
+    await loadDoctorLiterature();
 }
+
+function formatReferencesHtml(refs) {
+    if (!refs || !refs.length) return '';
+    const lis = refs.map(function (r) {
+        const line = escapeHtml(r.citation_short || r.title || ('PMID ' + r.pmid));
+        const apa = r.citation_apa
+            ? '<div style="font-size:0.8rem;color:var(--text-light);margin-top:4px;">' + escapeHtml(r.citation_apa) + '</div>'
+            : '';
+        let url = (r.url || '').trim();
+        try {
+            url = new URL(url).href.replace(/"/g, '&quot;');
+        } catch (e) {
+            url = '';
+        }
+        const link = url ? ' <a href="' + url + '" target="_blank" rel="noopener noreferrer">PubMed</a>' : '';
+        return '<li>' + line + link + apa + '</li>';
+    }).join('');
+    return '<div class="ai-references-block"><strong>Literature sources (this reply)</strong><ul>' + lis + '</ul></div>';
+}
+
+async function loadDoctorLiterature() {
+    const globalList = document.getElementById('litGlobalList');
+    const patientList = document.getElementById('litPatientList');
+    if (!globalList || typeof apiService === 'undefined') return;
+    try {
+        const gItems = await apiService.getLiterature('');
+        const global = (gItems || []).filter(function (i) { return i.scope === 'global'; });
+        globalList.innerHTML = global.length
+            ? global.map(renderLiteratureRow).join('')
+            : '<p style="color:var(--text-light);font-size:0.9rem;">No practice-wide articles yet.</p>';
+    } catch (e) {
+        globalList.innerHTML = '<p style="color:var(--error-color);font-size:0.9rem;">Could not load literature list.</p>';
+        console.warn('loadDoctorLiterature global:', e);
+    }
+    if (!patientList) return;
+    const pun = (typeof window.doctorLoadedPatientUsername !== 'undefined' && window.doctorLoadedPatientUsername)
+        ? window.doctorLoadedPatientUsername : '';
+    if (!pun) {
+        patientList.innerHTML = '<p style="color:var(--text-light);font-size:0.9rem;">Load a patient to add or view patient-specific PMIDs.</p>';
+        return;
+    }
+    try {
+        const items = await apiService.getLiterature(pun);
+        const pat = (items || []).filter(function (i) { return i.scope === 'patient'; });
+        patientList.innerHTML = pat.length
+            ? pat.map(renderLiteratureRow).join('')
+            : '<p style="color:var(--text-light);font-size:0.9rem;">No patient-specific articles yet.</p>';
+    } catch (e) {
+        patientList.innerHTML = '<p style="color:var(--error-color);font-size:0.9rem;">Could not load patient literature.</p>';
+    }
+}
+
+function renderLiteratureRow(item) {
+    const note = item.curator_note ? ' <span style="color:var(--text-light);">— ' + escapeHtml(item.curator_note) + '</span>' : '';
+    return '<div class="lit-row"><span><strong>PMID</strong> ' + escapeHtml(String(item.pmid)) + note + '</span>' +
+        '<button type="button" class="btn btn-link" style="font-size:0.85rem;padding:0;" onclick="deleteLiteratureItem(' + item.id + ')">Remove</button></div>';
+}
+
+window.addGlobalLiterature = async function () {
+    const input = document.getElementById('litGlobalPmid');
+    const pmid = input && input.value.trim();
+    if (!pmid) {
+        showToast('Enter a PubMed ID (PMID)', 'error');
+        return;
+    }
+    if (!currentUser) return;
+    try {
+        await apiService.addLiterature({
+            scope: 'global',
+            pmid: pmid,
+            added_by: currentUser.username
+        });
+        if (input) input.value = '';
+        showToast('Added practice-wide article', 'success');
+        await loadDoctorLiterature();
+    } catch (e) {
+        showToast(e.message || 'Could not add', 'error');
+    }
+};
+
+window.addPatientLiterature = async function () {
+    const input = document.getElementById('litPatientPmid');
+    const pmid = input && input.value.trim();
+    const pun = (typeof window.doctorLoadedPatientUsername !== 'undefined' && window.doctorLoadedPatientUsername) || '';
+    if (!pun) {
+        showToast('Load a patient first', 'error');
+        return;
+    }
+    if (!pmid) {
+        showToast('Enter a PMID', 'error');
+        return;
+    }
+    if (!currentUser) return;
+    try {
+        await apiService.addLiterature({
+            scope: 'patient',
+            patient_username: pun,
+            pmid: pmid,
+            added_by: currentUser.username
+        });
+        if (input) input.value = '';
+        showToast('Added for this patient', 'success');
+        await loadDoctorLiterature();
+    } catch (e) {
+        showToast(e.message || 'Could not add', 'error');
+    }
+};
+
+window.deleteLiteratureItem = async function (id) {
+    try {
+        await apiService.deleteLiterature(id);
+        showToast('Removed', 'success');
+        await loadDoctorLiterature();
+    } catch (e) {
+        showToast(e.message || 'Could not remove', 'error');
+    }
+};
 
 /** Populate the doctor's patient dropdown from the API. */
 async function loadDoctorPatientList() {
@@ -1775,7 +1910,8 @@ async function loadPatient(usernameOverride = null) {
         const medicalSummary = generateMedicalSummary(user, medicalInfo, prefs);
         // Store plain-text patient context for doctor AI assistant
         window.doctorCurrentPatientContext = buildPatientContextText(user, medicalInfo, prefs, notes);
-        
+        window.doctorLoadedPatientUsername = user.username || '';
+
         // Display notes with medical summary (with null check)
         const notesList = document.getElementById('doctorNotesList');
         if (notesList) {
@@ -1808,6 +1944,8 @@ async function loadPatient(usernameOverride = null) {
         } else {
             console.warn('doctorNotesList element not found');
         }
+
+        loadDoctorLiterature();
 
         // Show the patient info div AFTER all elements are populated
         if (patientInfoDiv) {

@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import re
 import xml.etree.ElementTree as ET
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
@@ -166,18 +166,172 @@ def _format_openfda_hit(hit: dict) -> Optional[str]:
     return "\n".join(lines)
 
 
-def gather_open_source_clinical_block(question: str, pubmed_max: int = 4) -> Optional[str]:
+def _pubmed_esummary_json(pmids: List[str]) -> dict:
+    if not pmids:
+        return {}
+    with httpx.Client(timeout=35.0) as client:
+        r = client.get(
+            f"{EUTILS_BASE}/esummary.fcgi",
+            params=_eutils_params({"db": "pubmed", "id": ",".join(pmids), "retmode": "json"}),
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+def _year_from_esummary(rec: dict) -> str:
+    sp = (rec.get("sortpubdate") or "")[:10]
+    if len(sp) >= 4 and sp[:4].isdigit():
+        return sp[:4]
+    pd = rec.get("pubdate") or ""
+    m = re.match(r"(\d{4})", pd)
+    return m.group(1) if m else ""
+
+
+def _doi_from_esummary(rec: dict) -> str:
+    for aid in rec.get("articleids") or []:
+        if isinstance(aid, dict) and aid.get("idtype") == "doi":
+            return (aid.get("value") or "").strip()
+    return ""
+
+
+def _author_family_from_pubmed_name(name: str) -> str:
+    """Best-effort: first token is family name for 'Sanchez-Rangel E' style."""
+    if not name:
+        return ""
+    return name.split()[0]
+
+
+def citation_record_from_esummary(pmid: str, rec: dict) -> Dict[str, Any]:
+    """Structured reference for API + APA-style strings."""
+    title = (rec.get("title") or "Untitled").strip()
+    if title.endswith("."):
+        title_t = title
+    else:
+        title_t = title + "."
+    journal = (rec.get("fulljournalname") or rec.get("source") or "").strip()
+    volume = (rec.get("volume") or "").strip()
+    issue = (rec.get("issue") or "").strip()
+    pages = (rec.get("pages") or "").strip()
+    year = _year_from_esummary(rec) or "n.d."
+    doi = _doi_from_esummary(rec)
+    url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+    authors_raw = []
+    for a in rec.get("authors") or []:
+        if isinstance(a, dict) and a.get("name"):
+            authors_raw.append(a["name"].strip())
+    sort_first = (rec.get("sortfirstauthor") or "").strip()
+    fam = _author_family_from_pubmed_name(sort_first) or (
+        _author_family_from_pubmed_name(authors_raw[0]) if authors_raw else "Unknown"
+    )
+    citation_short = f"{title} ({fam}, {year})"
+    # APA 7th-style journal article (omit missing parts)
+    auth_bits = []
+    for nm in authors_raw[:6]:
+        parts = nm.rsplit(" ", 1)
+        if len(parts) == 2 and len(parts[1]) <= 4 and parts[1].replace("-", "").isalpha():
+            auth_bits.append(f"{parts[0]}, {parts[1].replace(' ', '.')}.".replace("..", "."))
+        else:
+            auth_bits.append(nm)
+    if len(authors_raw) > 6:
+        auth_str = ", ".join(auth_bits) + ", et al."
+    elif len(auth_bits) == 1:
+        auth_str = auth_bits[0]
+    elif len(auth_bits) == 2:
+        auth_str = f"{auth_bits[0]}, & {auth_bits[1]}"
+    elif auth_bits:
+        auth_str = ", ".join(auth_bits[:-1]) + f", & {auth_bits[-1]}"
+    else:
+        auth_str = fam
+    jrnl = f"*{journal}*" if journal else ""
+    voliss = ""
+    if volume and issue:
+        voliss = f", *{volume}*({issue})"
+    elif volume:
+        voliss = f", *{volume}*"
+    pg = f", {pages}" if pages else ""
+    citation_apa = f"{auth_str} ({year}). {title_t}"
+    if journal:
+        citation_apa += f" {jrnl}{voliss}{pg}."
+    else:
+        citation_apa += "."
+    if doi:
+        citation_apa += f" https://doi.org/{doi}"
+    return {
+        "pmid": pmid,
+        "title": title,
+        "authors": authors_raw,
+        "year": year,
+        "journal": journal,
+        "volume": volume,
+        "issue": issue,
+        "pages": pages,
+        "doi": doi,
+        "url": url,
+        "citation_short": citation_short,
+        "citation_apa": citation_apa,
+        "source": "pubmed",
+    }
+
+
+def pubmed_references_for_pmids(pmids: List[str]) -> List[Dict[str, Any]]:
+    """Deduplicate while preserving order; fetch NLM summary metadata."""
+    seen = set()
+    ordered: List[str] = []
+    for p in pmids:
+        p = (p or "").strip()
+        if not p.isdigit() or p in seen:
+            continue
+        seen.add(p)
+        ordered.append(p)
+    if not ordered:
+        return []
+    data = _pubmed_esummary_json(ordered)
+    result = data.get("result", {})
+    uids = result.get("uids") or ordered
+    out: List[Dict[str, Any]] = []
+    for uid in uids:
+        rec = result.get(uid)
+        if not isinstance(rec, dict):
+            continue
+        out.append(citation_record_from_esummary(str(uid), rec))
+    return out
+
+
+def build_repository_pubmed_block(pmids: List[str], max_abstract_len: int = 800) -> Optional[str]:
+    """Text block for LLM from curated repository PMIDs."""
+    if not pmids:
+        return None
+    xml_blob = _pubmed_fetch_summaries(pmids[:20])
+    articles = _parse_pubmed_xml(xml_blob, max_abstract_len=max_abstract_len)
+    if not articles:
+        return None
+    lines = [
+        "--- Curated literature repository (your practice / patient-linked PubMed IDs) ---",
+        "Prioritize these when relevant to the question. Link: https://pubmed.ncbi.nlm.nih.gov/PMID/",
+    ]
+    for pmid, title, abstract in articles:
+        url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+        lines.append(f"PMID {pmid} | {title}")
+        lines.append(f"URL: {url}")
+        lines.append(abstract)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def gather_open_source_clinical_bundle(
+    question: str, pubmed_max: int = 4
+) -> Dict[str, Any]:
     """
-    Build a single text block for the LLM from PubMed + openFDA.
-    Returns None if nothing retrieved or question too short.
+    PubMed query search + openFDA. Returns text_block, query_pmids (from search only).
     """
     q = (question or "").strip()
+    out: Dict[str, Any] = {"text_block": None, "query_pmids": []}
     if len(q) < 4:
-        return None
+        return out
 
     parts: List[str] = []
-
     pmids = _pubmed_search_ids(q, retmax=pubmed_max)
+    out["query_pmids"] = list(pmids)
     if pmids:
         xml_blob = _pubmed_fetch_summaries(pmids)
         articles = _parse_pubmed_xml(xml_blob)
@@ -194,7 +348,6 @@ def gather_open_source_clinical_block(question: str, pubmed_max: int = 4) -> Opt
                 lines.append("")
             parts.append("\n".join(lines).strip())
 
-    # openFDA: try specific generic/brand matches from query tokens
     seen_set_ids = set()
     for tok in _tokenize_for_fda(q)[:4]:
         expr = f'openfda.generic_name:"{tok}"'
@@ -214,11 +367,18 @@ def gather_open_source_clinical_block(question: str, pubmed_max: int = 4) -> Opt
             break
 
     if not parts:
-        return None
+        return out
 
     header = (
         "Open-data clinical context (PubMed + openFDA). "
         "These are third-party public sources - not a diagnosis or prescribing instruction. "
         "Prefer recent guidelines and the patient's care team for decisions.\n\n"
     )
-    return header + "\n\n".join(parts)
+    out["text_block"] = header + "\n\n".join(parts)
+    return out
+
+
+def gather_open_source_clinical_block(question: str, pubmed_max: int = 4) -> Optional[str]:
+    """Backward-compatible: text only."""
+    b = gather_open_source_clinical_bundle(question, pubmed_max=pubmed_max)
+    return b.get("text_block")
