@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Fix database - Add patient_id column if missing"""
+import os
 import sqlite3
 
-DB_NAME = "wellbeing.db"
+DB_NAME = (
+    (os.environ.get("SQLITE_DATABASE_PATH") or os.environ.get("SQLITE_PATH") or "").strip()
+    or "wellbeing.db"
+)
 
 print("Fixing database...")
 conn = sqlite3.connect(DB_NAME)

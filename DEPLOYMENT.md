@@ -88,12 +88,16 @@ If you prefer the frontend on one host and the backend on another:
 
 ### Persistent accounts (SQLite on a disk)
 
-If you prefer SQLite, attach a **persistent disk** on Render, mount it (e.g. `/data`), and set:
+If you prefer SQLite, attach a **persistent disk** on Render, mount it at **`/data`** (recommended).
 
-- **Key:** `SQLITE_DATABASE_PATH`  
-- **Value:** `/data/wellbeing.db` (must be on the mounted volume)
+1. **Environment (optional on Render):** If `RENDER` is set and `/data` exists, the server **defaults** to `/data/wellbeing.db` automatically. You can still set explicitly:
+   - **Key:** `SQLITE_DATABASE_PATH`  
+   - **Value:** `/data/wellbeing.db` (must be on the mounted volume)
+2. **Optional:** `SQLITE_PERSISTENT=1` silences the login-page warning if your DB path is on disk but does not match the built-in `/data`/`/mnt/` prefixes.
 
-Without this, SQLite stays on ephemeral storage and is wiped on redeploy.
+**Moving existing SQLite data onto the disk:** Put your current `wellbeing.db` in the **same directory as `server.py`** in the deployed tree (e.g. upload or restore it there), then deploy with the disk mounted. On startup, if that legacy file has **more users** than the DB on the volume (or the volume file is missing), the server **copies** it to `SQLITE_DATABASE_PATH` using SQLite’s backup API (WAL-safe). If both files already exist with the same or higher user count on the target, it does not overwrite.
+
+Without a persistent path, SQLite stays on ephemeral storage and is wiped on redeploy.
 
 - **Health check:** `GET /api/health` returns `database` (`sqlite` or `postgresql`) and, for SQLite, `sqlite_path` so you can confirm where the file lives in logs.
 - **AI features:** If you use the in-app AI, set `OPENAI_API_KEY` in the environment (e.g. in Render’s Environment tab). If it’s not set, the rest of the app still works; only AI endpoints will return an error.

@@ -1,6 +1,10 @@
+import os
 import sqlite3
 
-DB_NAME = "wellbeing.db"
+DB_NAME = (
+    (os.environ.get("SQLITE_DATABASE_PATH") or os.environ.get("SQLITE_PATH") or "").strip()
+    or "wellbeing.db"
+)
 
 # Check database
 conn = sqlite3.connect(DB_NAME)

@@ -9,6 +9,7 @@ from flask_cors import CORS
 import sqlite3
 import json
 import os
+import shutil
 import uuid
 import string
 import random
@@ -48,6 +49,20 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
+# Directory containing this script (for static files and legacy SQLite migration).
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _resolve_sqlite_database_path():
+    """SQLite file path: explicit env wins; on Render with /data mounted, default to the persistent disk."""
+    explicit = (os.environ.get('SQLITE_DATABASE_PATH') or os.environ.get('SQLITE_PATH') or '').strip()
+    if explicit:
+        return explicit
+    if os.environ.get('RENDER') and os.path.isdir('/data'):
+        return '/data/wellbeing.db'
+    return 'wellbeing.db'
+
+
 # Database: SQLite by default, or PostgreSQL when DATABASE_URL is set (persists across redeploys on the host).
 # On Render/Fly/similar, default SQLite lives on an ephemeral disk — set DATABASE_URL (Postgres) or
 # SQLITE_DATABASE_PATH to a file on a mounted persistent disk (e.g. /data/wellbeing.db).
@@ -55,10 +70,7 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)  # psycopg2 expects postgresql://
 USE_PG = bool(DATABASE_URL and 'postgresql' in DATABASE_URL.lower())
-SQLITE_DATABASE_PATH = os.environ.get(
-    'SQLITE_DATABASE_PATH',
-    os.environ.get('SQLITE_PATH', 'wellbeing.db'),
-)
+SQLITE_DATABASE_PATH = _resolve_sqlite_database_path()
 
 def get_conn():
     if USE_PG:
@@ -68,6 +80,74 @@ def get_conn():
         except ImportError:
             pass
     return sqlite3.connect(SQLITE_DATABASE_PATH)
+
+
+def _sqlite_user_count(path):
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+            if not cur.fetchone():
+                return 0
+            cur.execute("SELECT COUNT(*) FROM users")
+            return int(cur.fetchone()[0])
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def _sqlite_clone_via_backup(src_path, dst_path):
+    """Copy a SQLite database file using the backup API (works with WAL)."""
+    dst_abs = os.path.abspath(dst_path)
+    parent = os.path.dirname(dst_abs)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    for suffix in ('', '-wal', '-shm'):
+        p = dst_abs + suffix if suffix else dst_abs
+        if os.path.isfile(p):
+            os.remove(p)
+    src_conn = sqlite3.connect(src_path)
+    try:
+        dst_conn = sqlite3.connect(dst_abs)
+        try:
+            with dst_conn:
+                src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+
+
+def _maybe_migrate_legacy_sqlite():
+    """
+    One-time style migration: if wellbeing.db next to server.py has more account data than the
+    configured DB file, copy it onto the target path (e.g. /data/wellbeing.db after adding a disk).
+    """
+    if USE_PG:
+        return
+    target = os.path.abspath(SQLITE_DATABASE_PATH)
+    legacy = os.path.abspath(os.path.join(BASE_DIR, 'wellbeing.db'))
+    if legacy == target or not os.path.isfile(legacy):
+        return
+    legacy_users = _sqlite_user_count(legacy)
+    if legacy_users == 0:
+        return
+    if not os.path.isfile(target):
+        _sqlite_clone_via_backup(legacy, target)
+        print(f"SQLite: migrated {legacy_users} user row(s) from legacy file -> {target}")
+        return
+    target_users = _sqlite_user_count(target)
+    if legacy_users > target_users:
+        bak = target + '.bak-before-migrate'
+        shutil.copy2(target, bak)
+        _sqlite_clone_via_backup(legacy, target)
+        print(
+            f"SQLite: replaced target ({target_users} user(s)) with legacy ({legacy_users} user(s)); "
+            f"previous DB copied to {bak}"
+        )
+
 
 def _run_execute_impl(cursor, sql, params=None):
     if params is None:
@@ -80,8 +160,6 @@ def _run_execute_impl(cursor, sql, params=None):
 def run_execute(cursor, sql, params=None):
     _run_execute_impl(cursor, sql, params)
 
-# Directory containing this script (for serving frontend when deployed)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ALLOWED_STATIC = {'index.html', 'styles.css', 'app.js', 'api-service.js', 'logo.png', 'favicon.ico'}
 
 # Unique ID for this server instance (different containers = different IDs; compare laptop vs tablet)
@@ -107,6 +185,9 @@ def init_db():
     if USE_PG:
         init_db_pg()
         return
+    _parent = os.path.dirname(os.path.abspath(SQLITE_DATABASE_PATH))
+    if _parent:
+        os.makedirs(_parent, exist_ok=True)
     conn = get_conn()
     cursor = conn.cursor()
     
@@ -1713,13 +1794,15 @@ def serve_static(filename):
 
 
 # Initialize database when app is loaded (needed when running under gunicorn on Render)
+_maybe_migrate_legacy_sqlite()
 init_db()
 if USE_PG:
     print("Database: PostgreSQL (DATABASE_URL) — user data persists with the hosted database.")
 else:
     _abs_sqlite = os.path.abspath(SQLITE_DATABASE_PATH)
     print(f"Database: SQLite file at {_abs_sqlite}")
-    print("If accounts disappear after each deploy, use PostgreSQL (DATABASE_URL) or a persistent disk + SQLITE_DATABASE_PATH.")
+    if _sqlite_likely_ephemeral_host():
+        print("If accounts disappear after each deploy, use PostgreSQL (DATABASE_URL) or a persistent disk + SQLITE_DATABASE_PATH.")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
