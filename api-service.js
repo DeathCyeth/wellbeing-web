@@ -354,6 +354,14 @@ class ApiService {
         });
     }
 
+    /** Create Admin user (requires ADMIN_BOOTSTRAP_KEY on server). */
+    async createAdminBootstrap({ bootstrap_key, username, password, name }) {
+        return await this.request('/admin/bootstrap', {
+            method: 'POST',
+            body: { bootstrap_key, username, password, name },
+        });
+    }
+
     // Generate personalized nutrition plan for a patient (username or patient_id)
     async generateNutritionPlan(params) {
         return await this.request('/ai/nutrition-plan', {

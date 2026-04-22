@@ -15,6 +15,8 @@ import string
 import random
 import unicodedata
 import re
+import hmac
+import hashlib
 from datetime import datetime
 
 
@@ -160,7 +162,17 @@ def _run_execute_impl(cursor, sql, params=None):
 def run_execute(cursor, sql, params=None):
     _run_execute_impl(cursor, sql, params)
 
-ALLOWED_STATIC = {'index.html', 'admin.html', 'styles.css', 'app.js', 'admin.js', 'api-service.js', 'logo.png', 'favicon.ico'}
+ALLOWED_STATIC = {
+    'index.html',
+    'admin.html',
+    'styles.css',
+    'app.js',
+    'admin.js',
+    'admin-setup.js',
+    'api-service.js',
+    'logo.png',
+    'favicon.ico',
+}
 
 # Unique ID for this server instance (different containers = different IDs; compare laptop vs tablet)
 INSTANCE_ID = os.environ.get('RENDER_INSTANCE_ID') or str(uuid.uuid4())[:8]
@@ -478,6 +490,35 @@ def _can_view_feedback_admin(user):
     return _norm(user.get("username") or "").lower() in admins
 
 
+def _admin_access_secret():
+    """If set, feedback admin UI is only served under /console/<secret>/ (not /admin.html)."""
+    return (os.environ.get("ADMIN_ACCESS_SECRET") or "").strip()
+
+
+def _admin_bootstrap_key():
+    """If set, POST /api/admin/bootstrap can create Admin users when the key matches."""
+    return (os.environ.get("ADMIN_BOOTSTRAP_KEY") or "").strip()
+
+
+def _const_time_str_equal(expected, provided):
+    """Constant-time compare for secrets (any length) via SHA-256 digests."""
+    if not expected or provided is None:
+        return False
+    try:
+        a = hashlib.sha256(str(expected).encode("utf-8")).digest()
+        b = hashlib.sha256(str(provided).strip().encode("utf-8")).digest()
+        return hmac.compare_digest(a, b)
+    except Exception:
+        return False
+
+
+def _console_secret_ok(secret):
+    exp = _admin_access_secret()
+    if not exp:
+        return False
+    return _const_time_str_equal(exp, (secret or "").strip())
+
+
 def _normalize_pmid(raw):
     s = re.sub(r"\D", "", str(raw or ""))
     if not s or len(s) > 12:
@@ -746,6 +787,57 @@ def feedback_admin_list():
     return jsonify({"items": items, "count": len(items)})
 
 
+@app.route("/api/admin/bootstrap", methods=["POST"])
+def admin_bootstrap_create():
+    """Create an Admin user when ADMIN_BOOTSTRAP_KEY matches (not available via public registration)."""
+    expected = _admin_bootstrap_key()
+    if not expected:
+        return jsonify(
+            {"error": "Admin bootstrap is not enabled. Set ADMIN_BOOTSTRAP_KEY on the server."}
+        ), 503
+    data = request.get_json() or {}
+    submitted = (data.get("bootstrap_key") or "").strip()
+    if not _const_time_str_equal(expected, submitted):
+        return jsonify({"error": "Invalid bootstrap key."}), 403
+    username = _norm(data.get("username") or "").lower()
+    password = _norm(data.get("password") or "")
+    name = _norm(data.get("name") or "")
+    if not all([username, password, name]):
+        return jsonify({"error": "Username, password, and name are required."}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters."}), 400
+    role = "Admin"
+    conn = get_conn()
+    cursor = conn.cursor()
+    try:
+        if USE_PG:
+            cursor.execute(
+                "INSERT INTO users (username, password, name, role, patient_id) VALUES (%s,%s,%s,%s,%s)",
+                (username, password, name, role, None),
+            )
+        else:
+            run_execute(
+                cursor,
+                "INSERT INTO users (username, password, name, role, patient_id) VALUES (?, ?, ?, ?, ?)",
+                (username, password, name, role, None),
+            )
+        conn.commit()
+        conn.close()
+        return jsonify(
+            {"message": "Admin account created. Sign in using your admin console URL to view feedback."}
+        ), 201
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        err = str(e).lower()
+        if "unique" in err or "integrity" in err or isinstance(e, sqlite3.IntegrityError):
+            return jsonify({"error": "Username already taken."}), 409
+        raise
+
+
 @app.route('/api/users/login', methods=['POST'])
 def login():
     """User login. Normalizes username/password (strip + NFKC) so different devices match."""
@@ -803,6 +895,14 @@ def create_user():
     
     if not all([username, password, name]):
         return jsonify({"error": "Username, password, and name are required"}), 400
+
+    if role.lower() == "admin":
+        return jsonify(
+            {
+                "error": "Admin accounts cannot be created from the public sign-up form. "
+                "Use the private admin setup URL and server bootstrap key from your operator."
+            }
+        ), 403
     
     conn = get_conn()
     cursor = conn.cursor()
@@ -1921,12 +2021,40 @@ Return only valid JSON, no other text. Use the patient's age, sex, weight, goals
 
 
 # Serve frontend (for all-in-one deployment)
+@app.route("/console/<secret>/")
+@app.route("/console/<secret>")
+def admin_console(secret):
+    """Private feedback admin login when ADMIN_ACCESS_SECRET is set. Share this URL, not /admin.html."""
+    if not _admin_access_secret():
+        return "", 404
+    if not _console_secret_ok(secret):
+        return "", 404
+    return send_from_directory(BASE_DIR, "admin.html")
+
+
+@app.route("/console/<secret>/create/")
+@app.route("/console/<secret>/create")
+def admin_console_setup(secret):
+    """Create Admin accounts (bootstrap key) — only when ADMIN_ACCESS_SECRET matches URL."""
+    if not _admin_access_secret():
+        return "", 404
+    if not _console_secret_ok(secret):
+        return "", 404
+    return send_from_directory(BASE_DIR, "admin-setup.html")
+
+
 @app.route('/')
 def serve_index():
     return send_from_directory(BASE_DIR, 'index.html')
 
 @app.route('/<path:filename>')
 def serve_static(filename):
+    if filename == "admin.html" and _admin_access_secret():
+        return "", 404
+    if filename == "admin-setup.html":
+        if _admin_access_secret():
+            return "", 404
+        return send_from_directory(BASE_DIR, "admin-setup.html")
     if filename in ALLOWED_STATIC:
         return send_from_directory(BASE_DIR, filename)
     return '', 404
@@ -1942,6 +2070,17 @@ else:
     print(f"Database: SQLite file at {_abs_sqlite}")
     if _sqlite_likely_ephemeral_host():
         print("If accounts disappear after each deploy, use PostgreSQL (DATABASE_URL) or a persistent disk + SQLITE_DATABASE_PATH.")
+
+if _admin_access_secret():
+    print(
+        "Admin feedback console: private URL path /console/<ADMIN_ACCESS_SECRET>/ "
+        "(env ADMIN_ACCESS_SECRET). Admin creation: /console/<secret>/create/ with ADMIN_BOOTSTRAP_KEY."
+    )
+elif _admin_bootstrap_key():
+    print(
+        "ADMIN_BOOTSTRAP_KEY is set: open /admin-setup.html to create Admin users, "
+        "or set ADMIN_ACCESS_SECRET to use only /console/<secret>/ and /console/<secret>/create/."
+    )
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))

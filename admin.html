@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <base href="/">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Feedback — Admin | Wellbeing Companion</title>
     <link rel="stylesheet" href="styles.css?v=4.3">
@@ -12,8 +13,12 @@
         <div class="card" style="margin-top: 24px;">
             <h1 style="font-size: 1.35rem;">User feedback (admin)</h1>
             <p style="color: var(--text-light); font-size: 0.9rem; margin: 8px 0 16px;">
-                Sign in with an account listed in <code>FEEDBACK_ADMIN_USERNAMES</code> on the server, or an account whose role is <strong>Admin</strong>.
-                <a href="./">Back to app</a>
+                Sign in with an account whose role is <strong>Admin</strong>, or one listed in <code>FEEDBACK_ADMIN_USERNAMES</code> on the server.
+                <a href="/">Back to app</a>
+            </p>
+            <p id="adminConsoleCreateWrap" style="display: none; margin-bottom: 12px; font-size: 0.9rem;">
+                <a id="adminConsoleCreateLink" href="#">Create another admin account</a>
+                <span style="color: var(--text-light);"> (bootstrap key required)</span>
             </p>
             <form id="adminFeedbackLoginForm" autocomplete="off">
                 <div class="form-group">
@@ -36,5 +41,16 @@
     </div>
     <script src="api-service.js"></script>
     <script src="admin.js"></script>
+    <script>
+        (function () {
+            var m = location.pathname.match(/^\/console\/([^/]+)/);
+            var wrap = document.getElementById('adminConsoleCreateWrap');
+            var link = document.getElementById('adminConsoleCreateLink');
+            if (m && wrap && link) {
+                link.href = '/console/' + m[1] + '/create';
+                wrap.style.display = 'block';
+            }
+        })();
+    </script>
 </body>
 </html>

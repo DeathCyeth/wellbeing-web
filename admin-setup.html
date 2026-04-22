@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <base href="/">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create admin | Wellbeing Companion</title>
+    <link rel="stylesheet" href="styles.css?v=4.3">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+</head>
+<body>
+    <div class="container" style="max-width: 520px;">
+        <div class="card" style="margin-top: 24px;">
+            <h1 style="font-size: 1.25rem;">Create admin account</h1>
+            <p style="color: var(--text-light); font-size: 0.9rem; margin: 8px 0 16px;">
+                Uses the <strong>bootstrap key</strong> from your server (<code>ADMIN_BOOTSTRAP_KEY</code>). After the first admins exist, remove or rotate that key on the server.
+            </p>
+            <p style="margin-bottom: 16px;"><a id="adminSetupBackLink" href="/admin.html">Back to feedback admin</a></p>
+            <form id="adminBootstrapForm" autocomplete="off">
+                <div class="form-group">
+                    <label for="bootstrapKey">Bootstrap key</label>
+                    <input type="password" id="bootstrapKey" required autocomplete="off" placeholder="From server env ADMIN_BOOTSTRAP_KEY">
+                </div>
+                <div class="form-group">
+                    <label for="adminNewName">Display name</label>
+                    <input type="text" id="adminNewName" required autocomplete="name">
+                </div>
+                <div class="form-group">
+                    <label for="adminNewUsername">Username</label>
+                    <input type="text" id="adminNewUsername" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="adminNewPassword">Password</label>
+                    <input type="password" id="adminNewPassword" required autocomplete="new-password" minlength="8">
+                </div>
+                <div class="form-group">
+                    <label for="adminNewPassword2">Confirm password</label>
+                    <input type="password" id="adminNewPassword2" required autocomplete="new-password" minlength="8">
+                </div>
+                <button type="submit" class="btn btn-primary" id="adminBootstrapSubmit">Create admin</button>
+            </form>
+            <div id="adminBootstrapError" class="error-message" style="margin-top: 12px;"></div>
+            <p id="adminBootstrapOk" style="margin-top: 12px; color: var(--success-color, #10b981); display: none;" role="status"></p>
+        </div>
+    </div>
+    <script src="api-service.js"></script>
+    <script src="admin-setup.js"></script>
+</body>
+</html>
