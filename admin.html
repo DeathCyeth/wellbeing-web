@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feedback — Admin | Wellbeing Companion</title>
+    <link rel="stylesheet" href="styles.css?v=4.3">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+</head>
+<body>
+    <div class="container" style="max-width: 900px;">
+        <div class="card" style="margin-top: 24px;">
+            <h1 style="font-size: 1.35rem;">User feedback (admin)</h1>
+            <p style="color: var(--text-light); font-size: 0.9rem; margin: 8px 0 16px;">
+                Sign in with an account listed in <code>FEEDBACK_ADMIN_USERNAMES</code> on the server, or an account whose role is <strong>Admin</strong>.
+                <a href="./">Back to app</a>
+            </p>
+            <form id="adminFeedbackLoginForm" autocomplete="off">
+                <div class="form-group">
+                    <label for="adminFbUsername">Username</label>
+                    <input type="text" id="adminFbUsername" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="adminFbPassword">Password</label>
+                    <input type="password" id="adminFbPassword" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary" id="adminFbLoadBtn">Load feedback</button>
+            </form>
+            <div id="adminFbError" class="error-message" style="margin-top: 12px;"></div>
+        </div>
+
+        <div id="adminFbResults" class="card" style="margin-top: 20px; display: none;">
+            <h2 style="font-size: 1.1rem; margin-bottom: 12px;">Latest submissions <span id="adminFbCount" style="color: var(--text-light); font-weight: normal;"></span></h2>
+            <div id="adminFbList"></div>
+        </div>
+    </div>
+    <script src="api-service.js"></script>
+    <script src="admin.js"></script>
+</body>
+</html>

@@ -66,6 +66,13 @@ body {
 }
 
 /* App Header */
+.app-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
 .app-header {
     background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
     padding: 18px 24px;

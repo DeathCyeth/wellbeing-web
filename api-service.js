@@ -338,6 +338,22 @@ class ApiService {
         return await this.request('/literature/' + id, { method: 'DELETE' });
     }
 
+    /** Submit in-app feedback (server verifies password). */
+    async submitFeedback({ username, password, message, source }) {
+        return await this.request('/feedback', {
+            method: 'POST',
+            body: { username, password, message, source: source || 'app' },
+        });
+    }
+
+    /** Admin: list feedback (requires FEEDBACK_ADMIN_USERNAMES or role Admin). */
+    async listFeedbackAdmin({ username, password }) {
+        return await this.request('/feedback/admin/list', {
+            method: 'POST',
+            body: { username, password },
+        });
+    }
+
     // Generate personalized nutrition plan for a patient (username or patient_id)
     async generateNutritionPlan(params) {
         return await this.request('/ai/nutrition-plan', {

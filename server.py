@@ -160,7 +160,7 @@ def _run_execute_impl(cursor, sql, params=None):
 def run_execute(cursor, sql, params=None):
     _run_execute_impl(cursor, sql, params)
 
-ALLOWED_STATIC = {'index.html', 'styles.css', 'app.js', 'api-service.js', 'logo.png', 'favicon.ico'}
+ALLOWED_STATIC = {'index.html', 'admin.html', 'styles.css', 'app.js', 'admin.js', 'api-service.js', 'logo.png', 'favicon.ico'}
 
 # Unique ID for this server instance (different containers = different IDs; compare laptop vs tablet)
 INSTANCE_ID = os.environ.get('RENDER_INSTANCE_ID') or str(uuid.uuid4())[:8]
@@ -301,6 +301,16 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_lit_patient_pmid ON literature_repository(patient_username, pmid) WHERE scope = 'patient'")
     except (sqlite3.OperationalError, Exception):
         pass
+    run_execute(cursor, """
+        CREATE TABLE IF NOT EXISTS user_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            message TEXT NOT NULL,
+            source TEXT,
+            created_at INTEGER NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -363,6 +373,16 @@ def init_db_pg():
     cur.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_lit_patient_pmid ON literature_repository (patient_username, pmid) WHERE scope = 'patient'"
     )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_feedback (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(255) NOT NULL,
+            role VARCHAR(64) NOT NULL,
+            message TEXT NOT NULL,
+            source VARCHAR(32),
+            created_at BIGINT NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
     print("PostgreSQL tables initialized (shared DB for all devices)")
@@ -419,6 +439,43 @@ def health():
     if not USE_PG:
         payload["sqlite_path"] = os.path.abspath(SQLITE_DATABASE_PATH)
     return jsonify(payload)
+
+
+def _parse_feedback_admin_usernames():
+    raw = os.environ.get("FEEDBACK_ADMIN_USERNAMES", "") or ""
+    return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+
+def _verify_user_credentials(username, password):
+    """Return dict with username, name, role if password matches; else None."""
+    uname = _norm(username or "").lower()
+    pwd = _norm(password or "")
+    if not uname or not pwd:
+        return None
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        "SELECT username, password, name, role FROM users WHERE username=?",
+        (uname,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row or _norm((row[1] or "")) != pwd:
+        return None
+    return {"username": row[0], "name": row[2], "role": row[3]}
+
+
+def _can_view_feedback_admin(user):
+    """Env FEEDBACK_ADMIN_USERNAMES (comma-separated) and/or users with role Admin."""
+    if not user:
+        return False
+    if _norm(user.get("role") or "").lower() == "admin":
+        return True
+    admins = _parse_feedback_admin_usernames()
+    if not admins:
+        return False
+    return _norm(user.get("username") or "").lower() in admins
 
 
 def _normalize_pmid(raw):
@@ -605,6 +662,88 @@ def literature_delete(item_id):
     if not deleted:
         return jsonify({"error": "Not found"}), 404
     return jsonify({"message": "Removed"})
+
+
+@app.route("/api/feedback", methods=["POST"])
+def feedback_submit():
+    """Authenticated patients/doctors submit feedback (password verifies identity)."""
+    data = request.get_json() or {}
+    user = _verify_user_credentials(data.get("username"), data.get("password"))
+    if not user:
+        return jsonify({"error": "Invalid username or password"}), 401
+    role_l = _norm(user.get("role") or "").lower()
+    if role_l not in ("patient", "doctor", "admin"):
+        return jsonify({"error": "This account cannot submit feedback through this form."}), 403
+    msg = (data.get("message") or "").strip()
+    if len(msg) < 4:
+        return jsonify({"error": "Please enter a slightly longer message (at least 4 characters)."}), 400
+    if len(msg) > 8000:
+        msg = msg[:8000]
+    if role_l == "admin":
+        source = "admin"
+    elif role_l == "patient":
+        source = "patient"
+    else:
+        source = "doctor"
+    ts = int(datetime.now().timestamp() * 1000)
+    conn = get_conn()
+    cursor = conn.cursor()
+    try:
+        if USE_PG:
+            cursor.execute(
+                """INSERT INTO user_feedback (username, role, message, source, created_at)
+                   VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                (user["username"], user["role"], msg, source, ts),
+            )
+            new_id = cursor.fetchone()[0]
+        else:
+            run_execute(
+                cursor,
+                """INSERT INTO user_feedback (username, role, message, source, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (user["username"], user["role"], msg, source, ts),
+            )
+            new_id = cursor.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"id": new_id, "message": "Thank you — your feedback was received."})
+
+
+@app.route("/api/feedback/admin/list", methods=["POST"])
+def feedback_admin_list():
+    """List feedback for admins (FEEDBACK_ADMIN_USERNAMES env and/or role Admin)."""
+    data = request.get_json() or {}
+    user = _verify_user_credentials(data.get("username"), data.get("password"))
+    if not user:
+        return jsonify({"error": "Invalid username or password"}), 401
+    if not _can_view_feedback_admin(user):
+        return jsonify(
+            {
+                "error": "Not authorized. Set FEEDBACK_ADMIN_USERNAMES on the server (comma-separated "
+                "usernames) or use an account with role Admin."
+            }
+        ), 403
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT id, username, role, message, source, created_at
+           FROM user_feedback ORDER BY created_at DESC LIMIT 500"""
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    items = [
+        {
+            "id": r[0],
+            "username": r[1],
+            "role": r[2],
+            "message": r[3],
+            "source": r[4] or "",
+            "created_at": r[5],
+        }
+        for r in rows
+    ]
+    return jsonify({"items": items, "count": len(items)})
 
 
 @app.route('/api/users/login', methods=['POST'])
