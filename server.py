@@ -490,23 +490,40 @@ def _can_view_feedback_admin(user):
     return _norm(user.get("username") or "").lower() in admins
 
 
+def _strip_wrapping_quotes_value(val):
+    """Strip one layer of surrounding ASCII quotes (common when pasting into env UIs)."""
+    s = (str(val or "")).strip()
+    if len(s) >= 2 and s[0] in ('"', "'") and s[-1] == s[0]:
+        return s[1:-1].strip()
+    return s
+
+
+def _env_strip_outer_quotes(var_name):
+    return _strip_wrapping_quotes_value(os.environ.get(var_name))
+
+
 def _admin_access_secret():
     """If set, feedback admin UI is only served under /console/<secret>/ (not /admin.html)."""
-    return (os.environ.get("ADMIN_ACCESS_SECRET") or "").strip()
+    return _env_strip_outer_quotes("ADMIN_ACCESS_SECRET")
 
 
 def _admin_bootstrap_key():
     """If set, POST /api/admin/bootstrap can create Admin users when the key matches."""
-    return (os.environ.get("ADMIN_BOOTSTRAP_KEY") or "").strip()
+    return _env_strip_outer_quotes("ADMIN_BOOTSTRAP_KEY")
 
 
-def _const_time_str_equal(expected, provided):
+def _const_time_str_equal(expected, provided, *, casefold=False):
     """Constant-time compare for secrets (any length) via SHA-256 digests."""
     if not expected or provided is None:
         return False
     try:
-        a = hashlib.sha256(str(expected).encode("utf-8")).digest()
-        b = hashlib.sha256(str(provided).strip().encode("utf-8")).digest()
+        ex = str(expected).strip()
+        pr = str(provided).strip()
+        if casefold:
+            ex = ex.casefold()
+            pr = pr.casefold()
+        a = hashlib.sha256(ex.encode("utf-8")).digest()
+        b = hashlib.sha256(pr.encode("utf-8")).digest()
         return hmac.compare_digest(a, b)
     except Exception:
         return False
@@ -516,7 +533,37 @@ def _console_secret_ok(secret):
     exp = _admin_access_secret()
     if not exp:
         return False
-    return _const_time_str_equal(exp, (secret or "").strip())
+    return _const_time_str_equal(exp, (secret or "").strip(), casefold=True)
+
+
+def _admin_console_help_response(reason):
+    """HTML body for /console/... when misconfigured or wrong secret (avoids blank 'Not Found')."""
+    if reason == "no_env":
+        body = (
+            "<p><strong>Private console URLs are off.</strong> <code>ADMIN_ACCESS_SECRET</code> is not set on "
+            "this server, so <code>/console/…</code> will not work.</p>"
+            "<p>To create an admin account without a private path, open "
+            '<a href="/admin-setup.html"><code>/admin-setup.html</code></a> '
+            "(requires <code>ADMIN_BOOTSTRAP_KEY</code> on the server).</p>"
+            "<p>To use private URLs, set <code>ADMIN_ACCESS_SECRET</code> on the host to your chosen token, "
+            "redeploy, then open <code>/console/&lt;that-token&gt;/create</code> .</p>"
+        )
+    else:
+        body = (
+            "<p><strong>This link does not match the server.</strong> The segment after <code>/console/</code> "
+            "must exactly match <code>ADMIN_ACCESS_SECRET</code> (letters and digits are compared "
+            "<strong>case-insensitively</strong>; check for typos or extra spaces in the Render env value).</p>"
+        )
+    html = (
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>Admin console</title></head><body style=\"font-family:system-ui,sans-serif;max-width:40em;"
+        "margin:2rem auto;padding:0 1.2rem;line-height:1.5;\">"
+        "<h1 style=\"font-size:1.25rem;\">Admin console</h1>"
+        f"{body}"
+        "<p><a href=\"/\">Main app</a></p></body></html>"
+    )
+    return html, 404, {"Content-Type": "text/html; charset=utf-8"}
 
 
 def _normalize_pmid(raw):
@@ -796,7 +843,7 @@ def admin_bootstrap_create():
             {"error": "Admin bootstrap is not enabled. Set ADMIN_BOOTSTRAP_KEY on the server."}
         ), 503
     data = request.get_json() or {}
-    submitted = (data.get("bootstrap_key") or "").strip()
+    submitted = _strip_wrapping_quotes_value(data.get("bootstrap_key") or "")
     if not _const_time_str_equal(expected, submitted):
         return jsonify({"error": "Invalid bootstrap key."}), 403
     username = _norm(data.get("username") or "").lower()
@@ -2026,9 +2073,9 @@ Return only valid JSON, no other text. Use the patient's age, sex, weight, goals
 def admin_console(secret):
     """Private feedback admin login when ADMIN_ACCESS_SECRET is set. Share this URL, not /admin.html."""
     if not _admin_access_secret():
-        return "", 404
+        return _admin_console_help_response("no_env")
     if not _console_secret_ok(secret):
-        return "", 404
+        return _admin_console_help_response("bad_secret")
     return send_from_directory(BASE_DIR, "admin.html")
 
 
@@ -2037,9 +2084,9 @@ def admin_console(secret):
 def admin_console_setup(secret):
     """Create Admin accounts (bootstrap key) — only when ADMIN_ACCESS_SECRET matches URL."""
     if not _admin_access_secret():
-        return "", 404
+        return _admin_console_help_response("no_env")
     if not _console_secret_ok(secret):
-        return "", 404
+        return _admin_console_help_response("bad_secret")
     return send_from_directory(BASE_DIR, "admin-setup.html")
 
 
