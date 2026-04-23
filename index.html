@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wellbeing Companion</title>
-    <link rel="stylesheet" href="styles.css?v=4.3">
+    <link rel="stylesheet" href="styles.css?v=4.5">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -236,31 +236,18 @@
     </div>
 
     <!-- Doctor Home Screen -->
-    <div id="doctorHome" class="screen">
+    <div id="doctorHome" class="screen doctor-home-screen">
         <div class="app-header">
             <h2 id="doctorWelcome">Doctor</h2>
             <div class="app-header-actions">
-                <button type="button" class="btn btn-secondary" onclick="document.getElementById('doctorFeedbackCard').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Go to feedback form">Feedback</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('doctorFeedbackCard').scrollIntoView({ behavior: 'smooth', block: 'end' });" title="Go to feedback form">Feedback</button>
                 <button class="btn btn-icon" onclick="logout()" title="Logout">
                     <span>Logout</span>
                 </button>
             </div>
         </div>
+        <div class="doctor-home-content">
         <div class="container">
-            <div class="card" id="doctorFeedbackCard">
-                <h3>Send feedback</h3>
-                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions or issues about the practice app. Your password verifies your account and is not stored with the message.</p>
-                <div class="form-group">
-                    <label for="doctorFeedbackMessage">Message</label>
-                    <textarea id="doctorFeedbackMessage" rows="4" placeholder="Type your feedback here..." maxlength="8000"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="doctorFeedbackPassword">Your password (verification)</label>
-                    <input type="password" id="doctorFeedbackPassword" autocomplete="current-password" placeholder="Required to submit">
-                </div>
-                <button type="button" class="btn btn-primary" onclick="submitDoctorFeedback()">Submit feedback</button>
-                <p id="doctorFeedbackStatus" class="feedback-status-line" style="margin-top: 12px; font-size: 0.9rem;" role="status"></p>
-            </div>
             <!-- Patient sign-up QR: scan to open registration on phone -->
             <div class="card" id="doctorPatientSignupCard">
                 <h3>Patient sign-up</h3>
@@ -480,6 +467,26 @@
                         </div>
                         <button type="submit" class="btn btn-primary">Add Note</button>
                     </form>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <div class="doctor-feedback-strip">
+            <div class="container">
+                <div class="card" id="doctorFeedbackCard">
+                    <h3>Send feedback</h3>
+                    <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions or issues about the practice app. Your password verifies your account and is not stored with the message.</p>
+                    <div class="form-group">
+                        <label for="doctorFeedbackMessage">Message</label>
+                        <textarea id="doctorFeedbackMessage" rows="4" placeholder="Type your feedback here..." maxlength="8000"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="doctorFeedbackPassword">Your password (verification)</label>
+                        <input type="password" id="doctorFeedbackPassword" autocomplete="current-password" placeholder="Required to submit">
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="submitDoctorFeedback()">Submit feedback</button>
+                    <p id="doctorFeedbackStatus" class="feedback-status-line" style="margin-top: 12px; font-size: 0.9rem;" role="status"></p>
                 </div>
             </div>
         </div>

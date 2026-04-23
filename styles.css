@@ -87,6 +87,38 @@ body {
     backdrop-filter: blur(10px);
 }
 
+/*
+ * Doctor layout: pin feedback to the bottom of the viewport.
+ * .screen.active uses display:block — override with grid !important so layout always applies.
+ * Middle column scrolls; header + feedback strip stay in view (footer pinned).
+ */
+#doctorHome.screen.doctor-home-screen.active {
+    display: grid !important;
+    grid-template-rows: auto 1fr auto;
+    grid-template-columns: minmax(0, 1fr);
+    height: 100vh;
+    max-height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+#doctorHome.doctor-home-screen.active .doctor-home-content {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+#doctorHome.doctor-home-screen.active .doctor-feedback-strip {
+    padding: 12px 0 20px;
+    border-top: 1px solid var(--border-color);
+    background: linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, #eef2ff 100%);
+    box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
+}
+
 /* Patient Navigation Tabs */
 .patient-nav-tabs {
     display: flex;
