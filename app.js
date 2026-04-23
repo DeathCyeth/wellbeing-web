@@ -2153,28 +2153,20 @@ async function addDoctorNote() {
 async function submitPatientFeedback() {
     const statusEl = document.getElementById('patientFeedbackStatus');
     const msgEl = document.getElementById('patientFeedbackMessage');
-    const pwdEl = document.getElementById('patientFeedbackPassword');
     if (!currentUser) return;
     const message = (msgEl && msgEl.value) ? msgEl.value.trim() : '';
-    const password = pwdEl ? pwdEl.value : '';
     if (statusEl) statusEl.textContent = '';
     if (message.length < 4) {
         if (statusEl) statusEl.textContent = 'Please enter a longer message.';
         return;
     }
-    if (!password) {
-        if (statusEl) statusEl.textContent = 'Password is required to verify your account.';
-        return;
-    }
     try {
         await apiService.submitFeedback({
             username: currentUser.username,
-            password,
             message,
             source: 'patient',
         });
         if (msgEl) msgEl.value = '';
-        if (pwdEl) pwdEl.value = '';
         if (statusEl) {
             statusEl.textContent = 'Thank you — your feedback was sent.';
             statusEl.style.color = 'var(--success-color, #10b981)';
@@ -2190,10 +2182,8 @@ async function submitPatientFeedback() {
 async function submitDoctorFeedback() {
     const statusEl = document.getElementById('doctorFeedbackStatus');
     const msgEl = document.getElementById('doctorFeedbackMessage');
-    const pwdEl = document.getElementById('doctorFeedbackPassword');
     if (!currentUser) return;
     const message = (msgEl && msgEl.value) ? msgEl.value.trim() : '';
-    const password = pwdEl ? pwdEl.value : '';
     if (statusEl) {
         statusEl.textContent = '';
         statusEl.style.color = '';
@@ -2202,19 +2192,13 @@ async function submitDoctorFeedback() {
         if (statusEl) statusEl.textContent = 'Please enter a longer message.';
         return;
     }
-    if (!password) {
-        if (statusEl) statusEl.textContent = 'Password is required to verify your account.';
-        return;
-    }
     try {
         await apiService.submitFeedback({
             username: currentUser.username,
-            password,
             message,
             source: 'doctor',
         });
         if (msgEl) msgEl.value = '';
-        if (pwdEl) pwdEl.value = '';
         if (statusEl) {
             statusEl.textContent = 'Thank you — your feedback was sent.';
             statusEl.style.color = 'var(--success-color, #10b981)';

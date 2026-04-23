@@ -5,7 +5,7 @@
     <base href="/">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Create admin | Wellbeing Companion</title>
-    <link rel="stylesheet" href="styles.css?v=4.3">
+    <link rel="stylesheet" href="styles.css?v=4.6">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 </head>
 <body>
@@ -16,6 +16,7 @@
                 Uses the <strong>bootstrap key</strong> from your server (<code>ADMIN_BOOTSTRAP_KEY</code>). After the first admins exist, remove or rotate that key on the server.
             </p>
             <p style="margin-bottom: 16px;"><a id="adminSetupBackLink" href="/admin.html">Back to feedback admin</a></p>
+            <div id="adminSetupServerHints" style="margin-bottom: 16px;"></div>
             <form id="adminBootstrapForm" autocomplete="off">
                 <div class="form-group">
                     <label for="bootstrapKey">Bootstrap key</label>

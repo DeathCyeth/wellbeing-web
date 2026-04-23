@@ -338,12 +338,16 @@ class ApiService {
         return await this.request('/literature/' + id, { method: 'DELETE' });
     }
 
-    /** Submit in-app feedback (server verifies password). */
-    async submitFeedback({ username, password, message, source }) {
-        return await this.request('/feedback', {
-            method: 'POST',
-            body: { username, password, message, source: source || 'app' },
-        });
+    /** Submit in-app feedback (username must exist; optional password for extra check). */
+    async submitFeedback({ username, message, source, password }) {
+        const body = { username, message, source: source || 'app' };
+        if (password) body.password = password;
+        return await this.request('/feedback', { method: 'POST', body });
+    }
+
+    /** Server env checklist for feedback / admin setup (no secrets). */
+    async getFeedbackConfig() {
+        return await this.request('/feedback/config');
     }
 
     /** Admin: list feedback (requires FEEDBACK_ADMIN_USERNAMES or role Admin). */

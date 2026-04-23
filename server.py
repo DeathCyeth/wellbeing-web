@@ -17,6 +17,7 @@ import unicodedata
 import re
 import hmac
 import hashlib
+import urllib.request
 from datetime import datetime
 
 
@@ -478,6 +479,57 @@ def _verify_user_credentials(username, password):
     return {"username": row[0], "name": row[2], "role": row[3]}
 
 
+def _lookup_feedback_submitter(username):
+    """Load user by username (no password) for in-app feedback from logged-in clients."""
+    uname = _norm(username or "").lower()
+    if not uname:
+        return None
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        "SELECT username, name, role FROM users WHERE username=?",
+        (uname,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"username": row[0], "name": row[1], "role": row[2]}
+
+
+def _notify_feedback_webhook(username, role, message, source, ts_ms):
+    """Optional Slack/Zapier/etc.: set FEEDBACK_NOTIFY_WEBHOOK to a URL that accepts JSON POST."""
+    url = (os.environ.get("FEEDBACK_NOTIFY_WEBHOOK") or "").strip()
+    if not url:
+        return
+    snippet = (message or "").replace("\r", " ").strip()
+    if len(snippet) > 3500:
+        snippet = snippet[:3497] + "..."
+    body = json.dumps(
+        {
+            "text": f"[Wellbeing Companion] Feedback\nUser: {username} ({role})\nSource: {source}\nTime: {ts_ms}\n\n{snippet}",
+            "username": username,
+            "role": role,
+            "source": source,
+            "message": message,
+            "created_at": ts_ms,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read(1024)
+    except Exception as ex:
+        print(f"FEEDBACK_NOTIFY_WEBHOOK request failed: {ex}")
+
+
 def _can_view_feedback_admin(user):
     """Env FEEDBACK_ADMIN_USERNAMES (comma-separated) and/or users with role Admin."""
     if not user:
@@ -752,13 +804,34 @@ def literature_delete(item_id):
     return jsonify({"message": "Removed"})
 
 
+@app.route("/api/feedback/config", methods=["GET"])
+def feedback_public_config():
+    """Non-secret hints for organizers (Render env checklist). No authentication."""
+    return jsonify(
+        {
+            "uses_private_console": bool(_admin_access_secret()),
+            "bootstrap_key_configured": bool(_admin_bootstrap_key()),
+            "notification_webhook_configured": bool(
+                (os.environ.get("FEEDBACK_NOTIFY_WEBHOOK") or "").strip()
+            ),
+            "feedback_admin_usernames_configured": bool(_parse_feedback_admin_usernames()),
+        }
+    )
+
+
 @app.route("/api/feedback", methods=["POST"])
 def feedback_submit():
-    """Authenticated patients/doctors submit feedback (password verifies identity)."""
+    """Submit feedback as a logged-in patient/doctor (username must exist). Password optional."""
     data = request.get_json() or {}
-    user = _verify_user_credentials(data.get("username"), data.get("password"))
-    if not user:
-        return jsonify({"error": "Invalid username or password"}), 401
+    pwd = _norm(data.get("password") or "")
+    if pwd:
+        user = _verify_user_credentials(data.get("username"), pwd)
+        if not user:
+            return jsonify({"error": "Invalid username or password"}), 401
+    else:
+        user = _lookup_feedback_submitter(data.get("username"))
+        if not user:
+            return jsonify({"error": "Unknown username. Stay logged in and try again."}), 400
     role_l = _norm(user.get("role") or "").lower()
     if role_l not in ("patient", "doctor", "admin"):
         return jsonify({"error": "This account cannot submit feedback through this form."}), 403
@@ -795,6 +868,7 @@ def feedback_submit():
         conn.commit()
     finally:
         conn.close()
+    _notify_feedback_webhook(user["username"], user["role"], msg, source, ts)
     return jsonify({"id": new_id, "message": "Thank you — your feedback was received."})
 
 

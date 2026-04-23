@@ -5,7 +5,7 @@
     <base href="/">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Feedback — Admin | Wellbeing Companion</title>
-    <link rel="stylesheet" href="styles.css?v=4.3">
+    <link rel="stylesheet" href="styles.css?v=4.6">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 </head>
 <body>
@@ -15,6 +15,10 @@
             <p style="color: var(--text-light); font-size: 0.9rem; margin: 8px 0 16px;">
                 Sign in with an account whose role is <strong>Admin</strong>, or one listed in <code>FEEDBACK_ADMIN_USERNAMES</code> on the server.
                 <a href="/">Back to app</a>
+            </p>
+            <p style="color: var(--text-light); font-size: 0.82rem; margin-bottom: 14px;">
+                Other ways to see feedback: set <code>FEEDBACK_NOTIFY_WEBHOOK</code> (Slack/Zapier URL) so each submission is POSTed as JSON, or open
+                <a href="/api/feedback/config" target="_blank" rel="noopener"><code>/api/feedback/config</code></a> to verify server flags (bootstrap, webhook, etc.).
             </p>
             <p id="adminConsoleCreateWrap" style="display: none; margin-bottom: 12px; font-size: 0.9rem;">
                 <a id="adminConsoleCreateLink" href="#">Create another admin account</a>

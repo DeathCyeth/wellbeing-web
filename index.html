@@ -219,14 +219,10 @@
             <div class="container">
                 <div class="card">
                     <h3>Send feedback</h3>
-                    <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions, bugs, or ideas for your doctor or the app team. Your password is only used to confirm your account and is not stored with the message.</p>
+                    <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions, bugs, or ideas for your doctor or the app team. Submitted under your logged-in account.</p>
                     <div class="form-group">
                         <label for="patientFeedbackMessage">Message</label>
                         <textarea id="patientFeedbackMessage" rows="5" placeholder="Type your feedback here..." maxlength="8000"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="patientFeedbackPassword">Your password (verification)</label>
-                        <input type="password" id="patientFeedbackPassword" autocomplete="current-password" placeholder="Required to submit">
                     </div>
                     <button type="button" class="btn btn-primary" onclick="submitPatientFeedback()">Submit feedback</button>
                     <p id="patientFeedbackStatus" class="feedback-status-line" style="margin-top: 12px; font-size: 0.9rem;" role="status"></p>
@@ -471,14 +467,10 @@
 
             <div class="card doctor-feedback-card" id="doctorFeedbackCard">
                 <h3>Send feedback</h3>
-                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions or issues about the practice app. Your password verifies your account and is not stored with the message.</p>
+                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions or issues about the practice app. Submitted under your logged-in doctor account.</p>
                 <div class="form-group">
                     <label for="doctorFeedbackMessage">Message</label>
                     <textarea id="doctorFeedbackMessage" rows="4" placeholder="Type your feedback here..." maxlength="8000"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="doctorFeedbackPassword">Your password (verification)</label>
-                    <input type="password" id="doctorFeedbackPassword" autocomplete="current-password" placeholder="Required to submit">
                 </div>
                 <button type="button" class="btn btn-primary" onclick="submitDoctorFeedback()">Submit feedback</button>
                 <p id="doctorFeedbackStatus" class="feedback-status-line" style="margin-top: 12px; font-size: 0.9rem;" role="status"></p>
@@ -497,8 +489,8 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script src="api-service.js?v=4.0"></script>
-    <script src="app.js?v=4.2"></script>
+    <script src="api-service.js?v=4.1"></script>
+    <script src="app.js?v=4.3"></script>
     <script>
         // Show which site we're on (so tablet users can confirm same URL as desktop)
         (function () {
