@@ -296,7 +296,8 @@ async function handleLogin() {
             name: user.name || user.full_name || '',
             role: user.role || 'Patient',
             patient_id: user.patient_id || '',
-            age: user.age || null
+            age: user.age || null,
+            feedback_token: user.feedback_token || user.feedbackToken || ''
         };
 
         if (!userData.username) {
@@ -2160,11 +2161,16 @@ async function submitPatientFeedback() {
         if (statusEl) statusEl.textContent = 'Please enter a longer message.';
         return;
     }
+    if (!currentUser.feedback_token) {
+        if (statusEl) statusEl.textContent = 'Please log out and log in once to enable feedback, then try again.';
+        return;
+    }
     try {
         await apiService.submitFeedback({
             username: currentUser.username,
             message,
             source: 'patient',
+            feedback_token: currentUser.feedback_token,
         });
         if (msgEl) msgEl.value = '';
         if (statusEl) {
@@ -2192,11 +2198,16 @@ async function submitDoctorFeedback() {
         if (statusEl) statusEl.textContent = 'Please enter a longer message.';
         return;
     }
+    if (!currentUser.feedback_token) {
+        if (statusEl) statusEl.textContent = 'Please log out and log in once to enable feedback, then try again.';
+        return;
+    }
     try {
         await apiService.submitFeedback({
             username: currentUser.username,
             message,
             source: 'doctor',
+            feedback_token: currentUser.feedback_token,
         });
         if (msgEl) msgEl.value = '';
         if (statusEl) {

@@ -338,10 +338,11 @@ class ApiService {
         return await this.request('/literature/' + id, { method: 'DELETE' });
     }
 
-    /** Submit in-app feedback (username must exist; optional password for extra check). */
-    async submitFeedback({ username, message, source, password }) {
+    /** Submit in-app feedback (requires feedback_token from login, or password in body). */
+    async submitFeedback({ username, message, source, password, feedback_token }) {
         const body = { username, message, source: source || 'app' };
         if (password) body.password = password;
+        if (feedback_token) body.feedback_token = feedback_token;
         return await this.request('/feedback', { method: 'POST', body });
     }
 

@@ -10,14 +10,20 @@ import sqlite3
 import json
 import os
 import shutil
+import sys
 import uuid
 import string
 import random
+import secrets
 import unicodedata
 import re
 import hmac
 import hashlib
 import urllib.request
+import smtplib
+import ssl
+import threading
+from email.message import EmailMessage
 from datetime import datetime
 
 
@@ -498,6 +504,51 @@ def _lookup_feedback_submitter(username):
     return {"username": row[0], "name": row[1], "role": row[2]}
 
 
+_FEEDBACK_EPHEMERAL_SIGNING_KEY = None
+
+
+def _feedback_signing_key_bytes():
+    """HMAC key for feedback session tokens. Set FEEDBACK_AUTH_SECRET on the host for stable multi-worker deploys."""
+    global _FEEDBACK_EPHEMERAL_SIGNING_KEY
+    raw = (os.environ.get("FEEDBACK_AUTH_SECRET") or "").strip()
+    if raw:
+        return raw.encode("utf-8")
+    if _FEEDBACK_EPHEMERAL_SIGNING_KEY is None:
+        _FEEDBACK_EPHEMERAL_SIGNING_KEY = secrets.token_bytes(32)
+        print(
+            "WARNING: FEEDBACK_AUTH_SECRET is not set. Feedback tokens reset on server restart; "
+            "set FEEDBACK_AUTH_SECRET in production (e.g. Render environment)."
+        )
+    return _FEEDBACK_EPHEMERAL_SIGNING_KEY
+
+
+def _make_feedback_token(username):
+    """Issued only after a successful password login; proves the client recently authenticated."""
+    uname = _norm(username or "").lower()
+    if not uname:
+        return None
+    exp = int(datetime.now().timestamp()) + (90 * 24 * 3600)
+    msg = f"{uname}|{exp}".encode("utf-8")
+    sig = hmac.new(_feedback_signing_key_bytes(), msg, hashlib.sha256).hexdigest()
+    return f"{exp}.{sig}"
+
+
+def _verify_feedback_token(username, token):
+    if not token or not username:
+        return False
+    uname = _norm(username).lower()
+    try:
+        exp_s, sig = str(token).strip().split(".", 1)
+        exp = int(exp_s)
+        if exp < int(datetime.now().timestamp()):
+            return False
+        msg = f"{uname}|{exp}".encode("utf-8")
+        expected = hmac.new(_feedback_signing_key_bytes(), msg, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, sig)
+    except Exception:
+        return False
+
+
 def _notify_feedback_webhook(username, role, message, source, ts_ms):
     """Optional Slack/Zapier/etc.: set FEEDBACK_NOTIFY_WEBHOOK to a URL that accepts JSON POST."""
     url = (os.environ.get("FEEDBACK_NOTIFY_WEBHOOK") or "").strip()
@@ -513,6 +564,8 @@ def _notify_feedback_webhook(username, role, message, source, ts_ms):
             "role": role,
             "source": source,
             "message": message,
+            # Zapier Catch Hook field trees sometimes omit "message"; map Gmail body to this instead.
+            "feedback_body": message,
             "created_at": ts_ms,
         },
         ensure_ascii=False,
@@ -528,6 +581,200 @@ def _notify_feedback_webhook(username, role, message, source, ts_ms):
             resp.read(1024)
     except Exception as ex:
         print(f"FEEDBACK_NOTIFY_WEBHOOK request failed: {ex}")
+
+
+def _feedback_smtp_no_auth():
+    return (os.environ.get("FEEDBACK_SMTP_NO_AUTH") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _feedback_email_settings():
+    """Read SMTP settings for optional inbox delivery of each feedback (see FEEDBACK_EMAIL_* env vars)."""
+    to_raw = (os.environ.get("FEEDBACK_EMAIL_TO") or "").strip()
+    host = (os.environ.get("FEEDBACK_SMTP_HOST") or "").strip()
+    user = (os.environ.get("FEEDBACK_SMTP_USER") or "").strip()
+    password = (
+        os.environ.get("FEEDBACK_SMTP_PASSWORD")
+        or os.environ.get("FEEDBACK_SMTP_PASS")
+        or ""
+    ).strip()
+    try:
+        port = int((os.environ.get("FEEDBACK_SMTP_PORT") or "587").strip())
+    except ValueError:
+        port = 587
+    from_addr = (os.environ.get("FEEDBACK_EMAIL_FROM") or "").strip() or user
+    use_ssl = (os.environ.get("FEEDBACK_SMTP_USE_SSL") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if port == 465:
+        use_ssl = True
+    skip_tls = (os.environ.get("FEEDBACK_SMTP_SKIP_TLS") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    return to_raw, host, user, password, port, from_addr, use_ssl, skip_tls
+
+
+def _feedback_smtp_configured():
+    """True when email-on-feedback is wired (no secrets exposed to clients)."""
+    to_raw, host, user, password, _, from_addr, _, _ = _feedback_email_settings()
+    if not to_raw or not host or not from_addr:
+        return False
+    if _feedback_smtp_no_auth():
+        return True
+    return bool(user and password)
+
+
+def _smtp_deliver_message(msg):
+    """Send a prepared EmailMessage using FEEDBACK_SMTP_* settings."""
+    _, host, user, password, port, _, use_ssl, skip_tls = _feedback_email_settings()
+    if not host:
+        raise RuntimeError("FEEDBACK_SMTP_HOST is not set")
+    ctx = ssl.create_default_context()
+    no_auth = _feedback_smtp_no_auth()
+    if use_ssl:
+        with smtplib.SMTP_SSL(host, port, context=ctx, timeout=45) as smtp:
+            if not no_auth:
+                smtp.login(user, password)
+            smtp.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port, timeout=45) as smtp:
+            smtp.ehlo()
+            if not skip_tls:
+                smtp.starttls(context=ctx)
+                smtp.ehlo()
+            if not no_auth:
+                smtp.login(user, password)
+            smtp.send_message(msg)
+
+
+def _send_feedback_email_sync(username, role, message, source, ts_ms, feedback_id):
+    to_raw, _, _, _, _, from_addr, _, _ = _feedback_email_settings()
+    recipients = [x.strip() for x in to_raw.split(",") if x.strip()]
+    if not recipients:
+        return
+    subject = f"[Wellbeing Companion] Feedback from {username} ({role})"
+    body = (
+        f"New feedback submission\n\n"
+        f"User: {username}\n"
+        f"Role: {role}\n"
+        f"Source: {source}\n"
+        f"Submitted at (epoch ms): {ts_ms}\n"
+        f"Row id: {feedback_id}\n\n"
+        f"Message:\n{message}\n"
+    )
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = ", ".join(recipients)
+    msg.set_content(body, charset="utf-8")
+    _smtp_deliver_message(msg)
+
+
+def _fetch_feedback_rows_chronological(limit=2000):
+    """Return feedback rows oldest-first for digest / export."""
+    conn = get_conn()
+    cursor = conn.cursor()
+    rows = []
+    try:
+        if USE_PG:
+            cursor.execute(
+                """SELECT id, username, role, message, source, created_at
+                   FROM user_feedback ORDER BY created_at ASC LIMIT %s""",
+                (limit,),
+            )
+            for r in cursor.fetchall():
+                rows.append(
+                    {
+                        "id": r[0],
+                        "username": r[1],
+                        "role": r[2],
+                        "message": r[3],
+                        "source": r[4] or "",
+                        "created_at": r[5],
+                    }
+                )
+        else:
+            run_execute(
+                cursor,
+                """SELECT id, username, role, message, source, created_at
+                   FROM user_feedback ORDER BY created_at ASC LIMIT ?""",
+                (limit,),
+            )
+            for r in cursor.fetchall():
+                rows.append(
+                    {
+                        "id": r[0],
+                        "username": r[1],
+                        "role": r[2],
+                        "message": r[3],
+                        "source": r[4] or "",
+                        "created_at": r[5],
+                    }
+                )
+    finally:
+        conn.close()
+    return rows
+
+
+def run_email_feedback_backlog_digest(limit=2000):
+    """One email summarizing existing DB rows. Run: python server.py --email-feedback-backlog"""
+    if not _feedback_smtp_configured():
+        raise RuntimeError(
+            "SMTP not configured. Set FEEDBACK_EMAIL_TO, FEEDBACK_EMAIL_FROM, FEEDBACK_SMTP_HOST, "
+            "FEEDBACK_SMTP_USER, FEEDBACK_SMTP_PASSWORD (same values as for live feedback email)."
+        )
+    db_rows = _fetch_feedback_rows_chronological(limit)
+    if not db_rows:
+        return 0
+    lines = [
+        f"Wellbeing Companion — stored feedback digest ({len(db_rows)} row(s), oldest first).\n"
+        "Each new submission is also emailed individually if SMTP env is set on the server.\n"
+    ]
+    max_msg = 3500
+    for row in db_rows:
+        text = row["message"] or ""
+        if len(text) > max_msg:
+            text = text[: max_msg - 3] + "..."
+        lines.append(
+            f"---\n"
+            f"id={row['id']}  user={row['username']}  role={row['role']}  "
+            f"source={row['source']}  created_at_ms={row['created_at']}\n"
+            f"{text}\n"
+        )
+    body = "\n".join(lines)
+    subject = f"[Wellbeing Companion] Feedback digest ({len(db_rows)} submissions)"
+    to_raw, _, _, _, _, from_addr, _, _ = _feedback_email_settings()
+    recipients = [x.strip() for x in to_raw.split(",") if x.strip()]
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = ", ".join(recipients)
+    msg.set_content(body, charset="utf-8")
+    _smtp_deliver_message(msg)
+    return len(db_rows)
+
+
+def _notify_feedback_email(username, role, message, source, ts_ms, feedback_id):
+    """Optional inbox copy: set FEEDBACK_EMAIL_TO + FEEDBACK_SMTP_* on the host. Runs in a background thread."""
+    if not _feedback_smtp_configured():
+        return
+
+    def run():
+        try:
+            _send_feedback_email_sync(
+                username, role, message, source, ts_ms, feedback_id
+            )
+        except Exception as ex:
+            print(f"FEEDBACK email notify failed: {ex}")
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _can_view_feedback_admin(user):
@@ -815,23 +1062,34 @@ def feedback_public_config():
                 (os.environ.get("FEEDBACK_NOTIFY_WEBHOOK") or "").strip()
             ),
             "feedback_admin_usernames_configured": bool(_parse_feedback_admin_usernames()),
+            "feedback_auth_secret_configured": bool((os.environ.get("FEEDBACK_AUTH_SECRET") or "").strip()),
+            "feedback_email_smtp_configured": bool(_feedback_smtp_configured()),
         }
     )
 
 
 @app.route("/api/feedback", methods=["POST"])
 def feedback_submit():
-    """Submit feedback as a logged-in patient/doctor (username must exist). Password optional."""
+    """Submit feedback only after a real login: signed feedback_token from /api/users/login, or password in body."""
     data = request.get_json() or {}
+    uname = _norm(data.get("username") or "").lower()
     pwd = _norm(data.get("password") or "")
+    token = (data.get("feedback_token") or data.get("feedbackToken") or "").strip()
+    user = None
     if pwd:
-        user = _verify_user_credentials(data.get("username"), pwd)
+        user = _verify_user_credentials(uname, pwd)
         if not user:
             return jsonify({"error": "Invalid username or password"}), 401
-    else:
-        user = _lookup_feedback_submitter(data.get("username"))
+    elif token and _verify_feedback_token(uname, token):
+        user = _lookup_feedback_submitter(uname)
         if not user:
-            return jsonify({"error": "Unknown username. Stay logged in and try again."}), 400
+            return jsonify({"error": "Unknown username."}), 400
+    else:
+        return jsonify(
+            {
+                "error": "Missing or expired feedback session. Log out and log in again, then submit feedback."
+            }
+        ), 401
     role_l = _norm(user.get("role") or "").lower()
     if role_l not in ("patient", "doctor", "admin"):
         return jsonify({"error": "This account cannot submit feedback through this form."}), 403
@@ -869,6 +1127,7 @@ def feedback_submit():
     finally:
         conn.close()
     _notify_feedback_webhook(user["username"], user["role"], msg, source, ts)
+    _notify_feedback_email(user["username"], user["role"], msg, source, ts, new_id)
     return jsonify({"id": new_id, "message": "Thank you — your feedback was received."})
 
 
@@ -990,14 +1249,18 @@ def login():
             print(f"Generated Patient ID {patient_id} for {user[0]}")
         
         conn.close()
-        return jsonify({
-            "username": user[0],
-            "name": user[2],
-            "role": user[3],
-            "patient_id": patient_id,
-            "age": user[5] if user[5] else None,
-            "sex": user[6] if len(user) > 6 and user[6] else ""
-        })
+        fb_tok = _make_feedback_token(user[0])
+        return jsonify(
+            {
+                "username": user[0],
+                "name": user[2],
+                "role": user[3],
+                "patient_id": patient_id,
+                "age": user[5] if user[5] else None,
+                "sex": user[6] if len(user) > 6 and user[6] else "",
+                "feedback_token": fb_tok,
+            }
+        )
     else:
         # Log for debugging cross-device login: does this username exist?
         user_exists = row is not None
@@ -2204,6 +2467,18 @@ elif _admin_bootstrap_key():
     )
 
 if __name__ == '__main__':
+    if '--email-feedback-backlog' in sys.argv:
+        try:
+            n = run_email_feedback_backlog_digest()
+            if n == 0:
+                print("No feedback rows in the database; no email sent.")
+            else:
+                print(f"Sent one digest email covering {n} feedback row(s) to FEEDBACK_EMAIL_TO.")
+        except Exception as ex:
+            print(f"Failed: {ex}")
+            sys.exit(1)
+        sys.exit(0)
+
     port = int(os.environ.get('PORT', 8000))
     debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
     print("=" * 50)

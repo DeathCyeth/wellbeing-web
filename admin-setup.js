@@ -28,6 +28,21 @@
                     '<code>FEEDBACK_NOTIFY_WEBHOOK</code> is set: each new feedback is also POSTed there as JSON (good for Slack/Zapier).'
                 );
             }
+            if (c.feedback_email_smtp_configured) {
+                parts.push(
+                    '<code>FEEDBACK_EMAIL_TO</code> + SMTP is set: each new feedback is also emailed to that address (in addition to the database).'
+                );
+            }
+            if (!c.notification_webhook_configured && !c.feedback_email_smtp_configured) {
+                parts.push(
+                    'To get alerts without opening this page, set <code>FEEDBACK_NOTIFY_WEBHOOK</code> (Slack/Zapier) and/or email: <code>FEEDBACK_EMAIL_TO</code>, <code>FEEDBACK_EMAIL_FROM</code>, <code>FEEDBACK_SMTP_HOST</code>, <code>FEEDBACK_SMTP_USER</code>, <code>FEEDBACK_SMTP_PASSWORD</code> (port defaults to 587; use <code>FEEDBACK_SMTP_USE_SSL=1</code> for port 465).'
+                );
+            }
+            if (!c.feedback_auth_secret_configured) {
+                parts.push(
+                    '<strong>Optional:</strong> set <code>FEEDBACK_AUTH_SECRET</code> so signed feedback tokens survive server restarts and match across multiple workers (Render paid scaling).'
+                );
+            }
             if (!c.feedback_admin_usernames_configured) {
                 parts.push(
                     'Tip: add <code>FEEDBACK_ADMIN_USERNAMES</code> (comma-separated doctor usernames) so those accounts can open the feedback inbox without an Admin role.'
