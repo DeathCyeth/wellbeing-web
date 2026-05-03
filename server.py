@@ -1080,14 +1080,30 @@ def feedback_submit():
         user = _verify_user_credentials(uname, pwd)
         if not user:
             return jsonify({"error": "Invalid username or password"}), 401
-    elif token and _verify_feedback_token(uname, token):
-        user = _lookup_feedback_submitter(uname)
-        if not user:
-            return jsonify({"error": "Unknown username."}), 400
+    elif token:
+        if not uname:
+            return jsonify({"error": "Username is required with your feedback session."}), 400
+        if _verify_feedback_token(uname, token):
+            user = _lookup_feedback_submitter(uname)
+            if not user:
+                return jsonify({"error": "Unknown username."}), 400
+        else:
+            return jsonify(
+                {
+                    "error": (
+                        "Your feedback session no longer matches the server (common right after a deploy, or when "
+                        "FEEDBACK_AUTH_SECRET is not set on the host). Log out and log back in, then try again. "
+                        "Operators: set FEEDBACK_AUTH_SECRET on Render so sessions survive restarts and match all instances."
+                    )
+                }
+            ), 401
     else:
         return jsonify(
             {
-                "error": "Missing or expired feedback session. Log out and log in again, then submit feedback."
+                "error": (
+                    "Missing feedback session. Log out and log in once so the app can refresh your session, "
+                    "then submit feedback."
+                )
             }
         ), 401
     role_l = _norm(user.get("role") or "").lower()
