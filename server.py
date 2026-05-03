@@ -2059,6 +2059,21 @@ def tavily_web_search(query: str, max_results: int = 6):
         return None
 
 
+def _openai_advice_model_id(has_image: bool) -> str:
+    """Chat model for /api/ai/advice. Override with fine-tuned IDs, e.g. ft:gpt-4o-mini:acme:custom:7q8m."""
+    if has_image:
+        custom = (os.environ.get("OPENAI_ADVICE_MODEL_VISION") or "").strip()
+        return custom if custom else "gpt-4o-mini"
+    custom = (os.environ.get("OPENAI_ADVICE_MODEL") or "").strip()
+    return custom if custom else "gpt-3.5-turbo"
+
+
+def _openai_nutrition_model_id() -> str:
+    """Chat model for /api/ai/nutrition-plan."""
+    custom = (os.environ.get("OPENAI_NUTRITION_MODEL") or "").strip()
+    return custom if custom else "gpt-3.5-turbo"
+
+
 @app.route('/api/ai/advice', methods=['POST'])
 def get_ai_advice():
     """Get AI advice using OpenAI with conversation memory"""
@@ -2251,7 +2266,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
                 if msg.get('role') == 'user' and msg.get('image') and str(msg.get('image', '')).startswith('data:image'):
                     has_image = True
                     break
-        model = "gpt-4o-mini" if has_image else "gpt-3.5-turbo"
+        model = _openai_advice_model_id(has_image)
         client = OpenAI(api_key=api_key)
         completion = client.chat.completions.create(
             model=model,
@@ -2398,7 +2413,7 @@ Return only valid JSON, no other text. Use the patient's age, sex, weight, goals
 
         client = OpenAI(api_key=api_key)
         completion = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model=_openai_nutrition_model_id(),
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1500,
             temperature=0.5,
@@ -2446,6 +2461,24 @@ def admin_console_setup(secret):
 @app.route('/')
 def serve_index():
     return send_from_directory(BASE_DIR, 'index.html')
+
+
+@app.route("/manifest.webmanifest")
+def serve_pwa_manifest():
+    """PWA manifest (installable app alongside the normal website)."""
+    return send_from_directory(
+        BASE_DIR, "manifest.webmanifest", mimetype="application/manifest+json"
+    )
+
+
+@app.route("/sw.js")
+def serve_service_worker():
+    """Service worker; scope / so it applies to /api and static assets."""
+    resp = send_from_directory(BASE_DIR, "sw.js")
+    resp.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
+
 
 @app.route('/<path:filename>')
 def serve_static(filename):

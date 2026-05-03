@@ -21,6 +21,22 @@ So it is **not** the same as **DoxGPT-style** products that attach **specific do
 
 After editing, **restart** the server locally or **redeploy** on Render.
 
+## Fine-tuned models (OpenAI)
+
+The app does **not** create fine-tunes by itself. You build training data (JSONL in OpenAI’s fine-tune format), run a **fine-tuning job** in the [OpenAI platform](https://platform.openai.com/docs/guides/fine-tuning), then copy the resulting **model id** (often `ft:...`).
+
+Set optional environment variables on Render (or locally) to use that model instead of the defaults:
+
+| Variable | Replaces | Default if unset |
+|----------|----------|-------------------|
+| `OPENAI_ADVICE_MODEL` | Text-only AI chat (`/api/ai/advice`) | `gpt-3.5-turbo` |
+| `OPENAI_ADVICE_MODEL_VISION` | Same route when an image is attached | `gpt-4o-mini` |
+| `OPENAI_NUTRITION_MODEL` | Nutrition plan JSON (`/api/ai/nutrition-plan`) | `gpt-3.5-turbo` |
+
+Vision-capable fine-tunes are uncommon; if yours is text-only, leave `OPENAI_ADVICE_MODEL_VISION` unset so image threads still use `gpt-4o-mini`.
+
+Fine-tuning needs a **labeled dataset** (examples of good answers for your domain). Prompt-only tuning (RAFT-style instructions in `get_ai_advice`) is often faster to try first; see prior notes on retrieval and system prompts.
+
 ## Citations on every reply
 
 `server.py` sends a **first system message on every API call** (`AI_CITATION_RULE_DOCTOR` / `AI_CITATION_RULE_PATIENT`) so **every** assistant answer—including short replies and follow-ups—must end with **`Supporting references`** (at least 2 bullets). Edit those constants near `get_ai_advice` to change wording or requirements.
