@@ -172,6 +172,8 @@ You get a home screen icon that opens the app full-screen, same data as the webs
 - Confirm the latest code is deployed and visit **`https://YOUR-SERVICE.onrender.com/manifest.webmanifest`** — it should show JSON, not a 404.
 - Same for **`/sw.js`** (JavaScript text).
 - Use **HTTPS** (Render does by default).
+- On **Android**, use **Google Chrome** (not Samsung Internet-only, and not the in-app browser inside Gmail/Facebook — use **Open in Chrome**).
+- Manifest icons must be real **`pwa-icon-192.png`** and **`pwa-icon-512.png`** (fixed sizes). If you swap `logo.png`, run **`python scripts/generate_pwa_icons.py`** after `pip install Pillow` and redeploy — see **`LOGO_SETUP.md`**.
 
 ---
 

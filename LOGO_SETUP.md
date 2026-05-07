@@ -19,6 +19,19 @@ Your logo will appear in two places:
 1. **Login/Register screen** - Main logo at the top
 2. **AI Companion section** - Smaller logo next to "AI Companion" heading
 
+## PWA install icons (Android / Chrome)
+
+The web app manifest (`manifest.webmanifest`) must list **PNG icons that are exactly 192×192 and 512×512 pixels**. Huge `logo.png` files caused Android Chrome not to offer **Install app** reliably.
+
+Repo includes **`pwa-icon-192.png`** and **`pwa-icon-512.png`** (cropped square from `logo.png`, center). After you replace **`logo.png`**, regenerate those two files:
+
+```powershell
+pip install Pillow
+python scripts\generate_pwa_icons.py
+```
+
+Then commit the updated `pwa-icon-*.png` files so deploys stay installable on phones.
+
 ## Customizing Logo Size
 
 If you need to adjust the logo size, edit `styles.css`:

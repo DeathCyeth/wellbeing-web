@@ -2268,8 +2268,14 @@ function installWellbeingApp() {
         /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     if (isIOS) {
         showToast('Tap Share, then Add to Home Screen (Safari).', 'info');
+    } else if (/Android/i.test(ua)) {
+        showToast(
+            'Chrome: tap ⋮ (menu) → Install app or Add to Home screen. Use Google Chrome, not Samsung Internet or an in-app browser. Pull to refresh if you just updated the app.',
+            'info',
+            9000
+        );
     } else {
-        showToast('Use the browser menu: Install app or Add to Home screen (Chrome on Android).', 'info');
+        showToast('Use the browser menu: Install app or Add to Home screen (Chrome / Edge).', 'info', 7000);
     }
 }
 
@@ -2294,7 +2300,7 @@ function logout() {
 }
 
 // Toast notification
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', durationMs = 3000) {
     const toast = document.getElementById('toast');
     toast.textContent = message;
     toast.className = `toast ${type}`;
@@ -2302,7 +2308,7 @@ function showToast(message, type = 'info') {
 
     setTimeout(() => {
         toast.classList.remove('show');
-    }, 3000);
+    }, durationMs);
 }
 
 // Utility function to escape HTML

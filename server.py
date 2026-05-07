@@ -178,6 +178,8 @@ ALLOWED_STATIC = {
     'admin-setup.js',
     'api-service.js',
     'logo.png',
+    'pwa-icon-192.png',
+    'pwa-icon-512.png',
     'favicon.ico',
 }
 
