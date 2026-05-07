@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-title" content="Wellbeing">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/logo.png">
-    <link rel="stylesheet" href="styles.css?v=4.6">
+    <link rel="stylesheet" href="styles.css?v=4.7">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -94,9 +94,13 @@
                     <button class="btn-copy-small" onclick="copyPatientIdFromHeader()" title="Copy ID">📋</button>
                 </div>
             </div>
-            <button class="btn btn-icon" onclick="logout()" title="Logout">
-                <span>Logout</span>
-            </button>
+            <div class="app-header-actions">
+                <button type="button" class="btn btn-secondary" onclick="showPatientTab('feedback')" title="Send feedback">Feedback</button>
+                <button type="button" class="btn btn-secondary" id="patientInstallAppBtn" onclick="installWellbeingApp()" title="Add this app to your home screen">Install</button>
+                <button class="btn btn-icon" onclick="logout()" title="Logout">
+                    <span>Logout</span>
+                </button>
+            </div>
         </div>
         
         <!-- Navigation Tabs -->
@@ -244,6 +248,7 @@
             <h2 id="doctorWelcome">Doctor</h2>
             <div class="app-header-actions">
                 <button type="button" class="btn btn-secondary" onclick="document.getElementById('doctorFeedbackCard').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Go to feedback form">Feedback</button>
+                <button type="button" class="btn btn-secondary" id="doctorInstallAppBtn" onclick="installWellbeingApp()" title="Add this app to your home screen">Install</button>
                 <button class="btn btn-icon" onclick="logout()" title="Logout">
                     <span>Logout</span>
                 </button>
@@ -497,7 +502,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="api-service.js?v=4.2"></script>
-    <script src="app.js?v=4.4"></script>
+    <script src="app.js?v=4.5"></script>
     <script>
         // Show which site we're on (so tablet users can confirm same URL as desktop)
         (function () {

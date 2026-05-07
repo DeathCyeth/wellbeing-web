@@ -8,6 +8,9 @@ let aiConversationHistory = [];
 // Doctor AI Assistant conversation history
 let doctorAIConversationHistory = [];
 
+/** Set by Chrome/Edge beforeinstallprompt; used by header Install button. */
+let deferredPwaPrompt = null;
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
     initializeApp();
@@ -52,6 +55,12 @@ async function initializeApp() {
     window.addEventListener('hashchange', function () {
         if (!currentUser && window.location.hash === '#register') showScreen('registerScreen');
     });
+
+    window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        deferredPwaPrompt = e;
+    });
+
     console.log('App initialization complete');
 }
 
@@ -421,6 +430,8 @@ async function showPatientHome() {
     
     // Show main tab by default
     showPatientTab('main');
+
+    updatePwaInstallButtonVisibility();
 
     // Load account information
     await loadPatientAccount();
@@ -1542,6 +1553,7 @@ async function showDoctorHome() {
     }
     await loadDoctorPatientList();
     await loadDoctorLiterature();
+    updatePwaInstallButtonVisibility();
 }
 
 function formatReferencesHtml(refs) {
@@ -2219,6 +2231,45 @@ async function submitDoctorFeedback() {
             statusEl.style.color = 'var(--error-color, #ef4444)';
             statusEl.textContent = e.message || 'Could not send feedback.';
         }
+    }
+}
+
+function updatePwaInstallButtonVisibility() {
+    const standalone =
+        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+        window.navigator.standalone === true;
+    ['patientInstallAppBtn', 'doctorInstallAppBtn'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = standalone ? 'none' : '';
+    });
+}
+
+/**
+ * Header "Install" — uses browser install prompt when available (Chrome/Edge/Android Chrome),
+ * otherwise short instructions (e.g. Safari Share → Add to Home Screen).
+ */
+function installWellbeingApp() {
+    const standalone =
+        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+        window.navigator.standalone === true;
+    if (standalone) {
+        showToast('You are already using the installed app.', 'info');
+        return;
+    }
+    if (deferredPwaPrompt) {
+        deferredPwaPrompt.prompt();
+        deferredPwaPrompt.userChoice.then(function () {
+            deferredPwaPrompt = null;
+        });
+        return;
+    }
+    const ua = navigator.userAgent || '';
+    const isIOS =
+        /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+        showToast('Tap Share, then Add to Home Screen (Safari).', 'info');
+    } else {
+        showToast('Use the browser menu: Install app or Add to Home screen (Chrome on Android).', 'info');
     }
 }
 
