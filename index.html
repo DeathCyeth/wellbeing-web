@@ -40,6 +40,7 @@
                     <div id="loginError" class="error-message"></div>
                     <div id="loginPersistenceWarning" class="persistence-warning" style="display: none;" role="status"></div>
                     <p id="loginSiteHint" class="login-site-hint" style="margin-top:12px;font-size:0.8rem;color:var(--text-light);"></p>
+                    <p id="pwaInstallHint" class="pwa-install-hint" style="display:none;margin-top:10px;font-size:0.78rem;line-height:1.45;color:var(--text-light);padding:10px 12px;background:var(--secondary-color);border-radius:8px;border:1px solid var(--border-color);" role="note"></p>
                 </form>
             </div>
         </div>
@@ -564,6 +565,31 @@
                 navigator.serviceWorker.register('/sw.js').catch(function () {});
             });
         }
+
+        // Phones do not show “Download” — explain Add to Home Screen / Install app (hidden when already installed).
+        (function () {
+            var standalone =
+                (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+                window.navigator.standalone === true;
+            var el = document.getElementById('pwaInstallHint');
+            if (!el || standalone) return;
+            var ua = navigator.userAgent || '';
+            var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            var isAndroid = /Android/i.test(ua);
+            var narrow = window.matchMedia && window.matchMedia('(max-width: 720px)').matches;
+            if (!isIOS && !isAndroid && !narrow) return;
+            el.style.display = 'block';
+            if (isIOS) {
+                el.innerHTML =
+                    '<strong>Put on your Home Screen:</strong> in <strong>Safari</strong>, tap the <strong>Share</strong> button, then <strong>Add to Home Screen</strong>. Apple does not offer an App Store “download” for this web app.';
+            } else if (isAndroid) {
+                el.innerHTML =
+                    '<strong>Install like an app:</strong> open this site in <strong>Chrome</strong>, tap <strong>⋮</strong> (menu) → <strong>Install app</strong> or <strong>Add to Home screen</strong>. If the option is missing, you may be inside another app’s browser—open the link in Chrome instead.';
+            } else {
+                el.innerHTML =
+                    '<strong>Install on your device:</strong> use Chrome (Android) or Safari (iPhone) and use the browser menu → Install / Add to Home screen.';
+            }
+        })();
     </script>
 </body>
 </html>

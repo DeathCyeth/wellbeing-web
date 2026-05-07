@@ -150,12 +150,38 @@ If you want a URL like `https://wellbeing.yourdomain.com`:
 
 ---
 
+## Install on a phone (same app as the website)
+
+There is **no “Download” button** in the App Store / Play Store for this version—it is a **website + PWA** you add from the browser.
+
+### iPhone / iPad (Safari)
+
+1. Open your live site in **Safari** (not Chrome-only tricks required on iOS).
+2. Tap the **Share** icon (square with arrow).
+3. Scroll and tap **Add to Home Screen**, then **Add**.
+
+You get a home screen icon that opens the app full-screen, same data as the website.
+
+### Android (Chrome)
+
+1. Open the site in **Google Chrome** (if you opened the link inside Gmail, Facebook, etc., use **⋮ → Open in Chrome** first).
+2. Tap **⋮** (menu) → **Install app** or **Add to Home screen** (wording varies by version).
+
+### If you never see “Install”
+
+- Confirm the latest code is deployed and visit **`https://YOUR-SERVICE.onrender.com/manifest.webmanifest`** — it should show JSON, not a 404.
+- Same for **`/sw.js`** (JavaScript text).
+- Use **HTTPS** (Render does by default).
+
+---
+
 ## Summary checklist
 
 - [ ] Code pushed to GitHub (Part 1).
 - [ ] Web Service created on Render with the correct **Build** and **Start** commands (Part 2).
 - [ ] `OPENAI_API_KEY` added if you use AI features (Part 2.4).
 - [ ] App tested via the Render URL (Part 2.6).
+- [ ] Optional: phone install tested (Safari / Chrome “Add to Home screen” — see **Install on a phone** above).
 - [ ] Instance type changed to **Starter** (or another paid plan) and payment method added if required (Part 3).
 - [ ] Optional: custom domain added and DNS set (Part 4).
 
