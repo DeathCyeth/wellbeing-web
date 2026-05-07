@@ -1027,6 +1027,7 @@ def literature_add():
         raise
     finally:
         conn.close()
+    _notify_literature_webhook(scope, pmid, added_by, note, patient_username)
     return jsonify(
         {
             "id": new_id,
@@ -1066,6 +1067,9 @@ def feedback_public_config():
             "feedback_admin_usernames_configured": bool(_parse_feedback_admin_usernames()),
             "feedback_auth_secret_configured": bool((os.environ.get("FEEDBACK_AUTH_SECRET") or "").strip()),
             "feedback_email_smtp_configured": bool(_feedback_smtp_configured()),
+            "literature_notify_webhook_configured": bool(
+                (os.environ.get("LITERATURE_NOTIFY_WEBHOOK") or "").strip()
+            ),
         }
     )
 
@@ -1163,12 +1167,34 @@ def feedback_admin_list():
                 "usernames) or use an account with role Admin."
             }
         ), 403
+    filt_src = _norm(data.get("filter_source") or "").lower()
+    filt_role = _norm(data.get("filter_role") or "").lower()
+    search = _norm(data.get("search") or "").lower()
+
+    clauses = []
+    params = []
+    if filt_src in ("patient", "doctor", "admin"):
+        clauses.append("LOWER(TRIM(COALESCE(source,'')))=?")
+        params.append(filt_src)
+    if filt_role in ("patient", "doctor", "admin"):
+        clauses.append("LOWER(TRIM(COALESCE(role,'')))=?")
+        params.append(filt_role)
+    if search:
+        like = "%" + search.replace("%", "").replace("_", "") + "%"
+        clauses.append(
+            "(LOWER(COALESCE(message,'')) LIKE ? OR LOWER(COALESCE(username,'')) LIKE ?)"
+        )
+        params.extend([like, like])
+
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = (
+        "SELECT id, username, role, message, source, created_at FROM user_feedback"
+        + where_sql
+        + " ORDER BY created_at DESC LIMIT 500"
+    )
     conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute(
-        """SELECT id, username, role, message, source, created_at
-           FROM user_feedback ORDER BY created_at DESC LIMIT 500"""
-    )
+    run_execute(cursor, sql, tuple(params))
     rows = cursor.fetchall()
     conn.close()
     items = [
@@ -2011,12 +2037,16 @@ def update_medical_info(username):
 AI_CITATION_RULE_DOCTOR = """Citation rule (applies to EVERY reply, no exceptions—including brief answers, follow-ups, and clarifications):
 After your main answer, always add a section with this exact heading on its own line:
 **Supporting references**
-Then at least 2 bullet points. If a system message in this request contains "Web search results", you MUST include at least one bullet with a markdown link [source title](url) for any web information you used—copy URLs EXACTLY from the "URL:" lines in that block only. You may add other bullets naming guideline bodies (ADA, WHO, NHS, etc.) without URLs when not from web results. If there is no web search block, do not invent URLs—name organizations/topics only. If the reply is only restating patient data from context, include one bullet noting patient context and still add guideline-style references."""
+Then at least 2 bullet points. If a system message in this request contains "Web search results", you MUST include at least one bullet with a markdown link [source title](url) for any web information you used—copy URLs EXACTLY from the "URL:" lines in that block only. You may add other bullets naming guideline bodies (ADA, WHO, NHS, etc.) without URLs when not from web results. If there is no web search block, do not invent URLs—name organizations/topics only. If the reply is only restating patient data from context, include one bullet noting patient context and still add guideline-style references.
+
+Evidence discipline: When system messages include PubMed/openFDA excerpts, web search results, or the literature repository block, use only those passages to support clinical, nutrition, or medication statements. If a passage is off-topic for the question, do not cite or restate it as if it applied. Do not invent PMIDs, DOIs, or URLs. For calories, BMR, or TDEE numbers, either derive them step-by-step from explicit patient metrics in this thread or label them clearly as general educational estimates—not personalized medical facts."""
 
 AI_CITATION_RULE_PATIENT = """Citation rule (applies to EVERY reply, no exceptions—including short answers and follow-ups):
 After your main answer, always add a section with this exact heading on its own line:
 **Supporting references**
-At least 2 bullet points. If a system message contains "Web search results", include markdown links [title](url) using ONLY URLs copied exactly from that block for web-based information. If there is no web search block, name sources by organization/topic only—do not invent URLs. If you relied mainly on profile/notes from this app, say so in one bullet and add general references."""
+At least 2 bullet points. If a system message contains "Web search results", include markdown links [title](url) using ONLY URLs copied exactly from that block for web-based information. If there is no web search block, name sources by organization/topic only—do not invent URLs. If you relied mainly on profile/notes from this app, say so in one bullet and add general references.
+
+Evidence discipline: When PubMed, openFDA, web search, or curated repository text is provided, prefer it for factual health claims and ignore unrelated snippets. Never fabricate study links or PMIDs. For calorie or body-composition numbers, say they are estimates unless they are clearly calculated from your saved profile data in this app; if data is missing, give general guidance and encourage checking with your care team."""
 
 
 def tavily_web_search(query: str, max_results: int = 6):
@@ -2074,6 +2104,193 @@ def _openai_nutrition_model_id() -> str:
     """Chat model for /api/ai/nutrition-plan."""
     custom = (os.environ.get("OPENAI_NUTRITION_MODEL") or "").strip()
     return custom if custom else "gpt-3.5-turbo"
+
+
+def _notify_literature_webhook(scope, pmid, added_by, note, patient_username):
+    """Optional Discord/Slack/Zapier: JSON POST when a PMID is added to the repository."""
+    url = (os.environ.get("LITERATURE_NOTIFY_WEBHOOK") or "").strip()
+    if not url:
+        return
+    snippet = (note or "").replace("\r", " ").strip()
+    if len(snippet) > 800:
+        snippet = snippet[:797] + "..."
+    body = json.dumps(
+        {
+            "text": (
+                f"[Wellbeing Companion] Literature repository\n"
+                f"Scope: {scope}\nPMID: {pmid}\n"
+                f"Patient: {patient_username or '—'}\nAdded by: {added_by or '—'}\n"
+                f"Note: {snippet or '—'}"
+            ),
+            "scope": scope,
+            "pmid": pmid,
+            "patient_username": patient_username,
+            "added_by": added_by,
+            "curator_note": note,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read(1024)
+    except Exception as ex:
+        print(f"LITERATURE_NOTIFY_WEBHOOK request failed: {ex}")
+
+
+def _nutrition_sex_low(sex_raw):
+    s = _norm(sex_raw or "").lower()
+    if s.startswith("m"):
+        return "m"
+    return "f"
+
+
+def _nutrition_weight_kg(weight_str):
+    if weight_str is None or str(weight_str).strip() == "":
+        return None
+    s = str(weight_str).lower().replace(",", "")
+    m = re.search(r"([\d.]+)\s*(kg|kilos?)\b", s)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"([\d.]+)\s*(lb|lbs|pounds?)\b", s)
+    if m:
+        return float(m.group(1)) * 0.45359237
+    m = re.search(r"([\d.]+)", s)
+    if m:
+        return float(m.group(1)) * 0.45359237
+    return None
+
+
+def _nutrition_height_cm(height_text, feet, inches):
+    if feet not in (None, "") or inches not in (None, ""):
+        try:
+            ft = float(feet or 0)
+            inc = float(inches or 0)
+            total_in = ft * 12 + inc
+            if total_in > 0:
+                return round(total_in * 2.54, 1)
+        except (TypeError, ValueError):
+            pass
+    t = _norm(height_text or "")
+    m = re.search(r"(\d+\.?\d*)\s*cm", t, re.I)
+    if m:
+        return round(float(m.group(1)), 1)
+    m = re.search(r"(\d+)\s*['′]\s*(\d+(?:\.\d+)?)\s*[\"″]?", t)
+    if m:
+        total_in = int(m.group(1)) * 12 + float(m.group(2))
+        return round(total_in * 2.54, 1)
+    return None
+
+
+def _nutrition_activity_multiplier(activity_level, physical_activity):
+    t = f"{activity_level or ''} {physical_activity or ''}".lower()
+    if any(x in t for x in ("sedentary", "desk", "little exercise", "none")):
+        return 1.2
+    if any(x in t for x in ("very active", "extremely", "athlete", "heavy exercise")):
+        return 1.725
+    if any(x in t for x in ("moderate", "medium", "regular")):
+        return 1.55
+    if any(x in t for x in ("light", "lightly", "walking")):
+        return 1.375
+    return 1.375
+
+
+def _nutrition_bmr_mifflin(weight_kg, height_cm, age, sex_low):
+    if weight_kg is None or height_cm is None or age is None:
+        return None
+    try:
+        a = int(age)
+        w = float(weight_kg)
+        h = float(height_cm)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0 or a < 14 or a > 120:
+        return None
+    base = 10 * w + 6.25 * h - 5 * a
+    return base + 5 if str(sex_low or "f").startswith("m") else base - 161
+
+
+def _nutrition_maintenance_estimate(weight_kg, height_cm, age, sex_raw, activity_level, physical_activity):
+    """Rough TDEE (kcal/day) when biometrics exist; otherwise None."""
+    sex_l = _nutrition_sex_low(sex_raw)
+    bmr = _nutrition_bmr_mifflin(weight_kg, height_cm, age, sex_l)
+    if bmr is None:
+        return None, []
+    af = _nutrition_activity_multiplier(activity_level, physical_activity)
+    td = round(bmr * af)
+    notes = [f"Estimated maintenance ~{td} kcal/day (Mifflin-St Jeor BMR × activity factor)."]
+    return td, notes
+
+
+def _nutrition_weight_loss_floor_kcal(age, sex_low):
+    if age and age < 18:
+        return 1400
+    if str(sex_low or "f").startswith("m"):
+        return 1500
+    return 1200
+
+
+def _plan_parse_int_calories(val):
+    if val is None:
+        return None
+    m = re.search(r"-?\d+", str(val))
+    if not m:
+        return None
+    return int(m.group(0))
+
+
+def _plan_store_calories(plan, key, n):
+    plan[key] = str(int(round(n)))
+
+
+def _nutrition_clamp_plan(plan, maintenance_target, sex_raw, age):
+    """Coerce AI calorie fields toward safe, internally consistent ranges."""
+    notes = []
+    if not isinstance(plan, dict):
+        return plan, notes
+    sex_l = _nutrition_sex_low(sex_raw)
+    floor_loss = _nutrition_weight_loss_floor_kcal(age, sex_l)
+    maint = _plan_parse_int_calories(plan.get("maintenance_calories"))
+    loss = _plan_parse_int_calories(plan.get("weight_loss_calories"))
+    if maint is None or loss is None:
+        return plan, notes
+
+    if maintenance_target and maintenance_target > 0:
+        snap = int(round(maintenance_target))
+        if snap > 0 and abs(maint - snap) / snap > 0.22:
+            notes.append(
+                f"Adjusted maintenance calories from {maint} toward ~{snap} kcal/day based on height/weight/age/activity."
+            )
+            maint = snap
+        maint = max(900, min(maint, int(snap * 1.12) if snap else maint))
+    else:
+        maint = max(1000, maint)
+
+    hi_loss = maint - 300
+    if hi_loss <= floor_loss:
+        notes.append(
+            "Incomplete height/weight/age data: calorie targets kept conservative — verify with a clinician."
+        )
+        loss = max(floor_loss, min(loss, max(maint - 250, floor_loss)))
+    else:
+        if loss < floor_loss:
+            notes.append(f"Raised weight-loss calories to safe minimum (~{floor_loss} kcal/day) for stated sex/age group.")
+            loss = floor_loss
+        if loss > hi_loss:
+            notes.append(f"Capped weight-loss calories at {hi_loss} so intake stays ≥300 kcal below maintenance.")
+            loss = hi_loss
+        if loss >= maint:
+            loss = max(floor_loss, maint - 500)
+            notes.append("Adjusted weight-loss calories to sit below maintenance with a modest deficit.")
+
+    _plan_store_calories(plan, "maintenance_calories", maint)
+    _plan_store_calories(plan, "weight_loss_calories", loss)
+    return plan, notes
 
 
 @app.route('/api/ai/advice', methods=['POST'])
@@ -2391,10 +2608,27 @@ def generate_nutrition_plan():
             if wb:
                 web_extra = '\n\n' + wb + '\n\n(If you use information from the web block above, the references string must include the exact https URLs from the URL: lines.)'
 
+        w_kg = _nutrition_weight_kg(med[6])
+        h_cm = _nutrition_height_cm(med[5], med[7], med[8])
+        maint_est, est_notes = _nutrition_maintenance_estimate(
+            w_kg, h_cm, user_age, user_sex, med[11], med[3]
+        )
+        calibration = ""
+        if maint_est:
+            calibration = (
+                f"\n\nEnergy targets (follow closely when height/weight/age align with context): "
+                f"estimated maintenance TDEE ≈ {maint_est} kcal/day (Mifflin-St Jeor BMR × activity factor). "
+                f"Set maintenance_calories within about ±10% of that estimate. "
+                f"Set weight_loss_calories about 400–500 kcal/day below maintenance_calories "
+                f"unless contraindicated in notes—never equal to or above maintenance. "
+                f"Minimum safe intake for weight-loss phase is approximately 1200 kcal/day (many women) "
+                f"or 1500 kcal/day (many men)—do not go lower for adults unless clinician notes explicitly allow."
+            )
+
         prompt = f"""Generate a personalized nutrition plan for this patient. Use ONLY the information below. Return a JSON object with exactly these keys (all strings; for arrays use JSON arrays of strings):
 
 - maintenance_calories: e.g. "2000"
-- weight_loss_calories: e.g. "1500"
+- weight_loss_calories: e.g. "1500" (must be MEANINGFULLY LESS than maintenance_calories—prefer at least ~300–500 kcal lower)
 - carbs_g: e.g. "200"
 - protein_g: e.g. "150"
 - fats_g: e.g. "65"
@@ -2410,23 +2644,34 @@ def generate_nutrition_plan():
 Patient context:
 {context}
 {web_extra}
+{calibration}
 
-Return only valid JSON, no other text. Use the patient's age, sex, weight, goals, allergies, and activity to set realistic numbers. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
+Consistency: weight_loss_calories must stay below maintenance_calories. Avoid extreme starvation-level numbers for adults (e.g. do not recommend sustained intake under ~1200 kcal/day for typical adult females or ~1500 for typical adult males without explicit clinician instruction in the context above).
+
+Return only valid JSON, no other text. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
 
         client = OpenAI(api_key=api_key)
         completion = client.chat.completions.create(
             model=_openai_nutrition_model_id(),
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1500,
-            temperature=0.5,
+            temperature=0.35,
             response_format={"type": "json_object"}
         )
         raw = completion.choices[0].message.content or "{}"
+        validation_notes = list(est_notes or [])
         try:
             plan_data = json.loads(raw)
         except Exception:
             plan_data = {"_raw": raw}
-        return jsonify({"plan": plan_data})
+
+        if isinstance(plan_data, dict) and "_raw" not in plan_data:
+            plan_data, vnotes = _nutrition_clamp_plan(
+                plan_data, maint_est, user_sex, user_age
+            )
+            validation_notes.extend(vnotes)
+
+        return jsonify({"plan": plan_data, "validation_notes": validation_notes})
     except Exception as e:
         if conn:
             try:

@@ -352,10 +352,14 @@ class ApiService {
     }
 
     /** Admin: list feedback (requires FEEDBACK_ADMIN_USERNAMES or role Admin). */
-    async listFeedbackAdmin({ username, password }) {
+    async listFeedbackAdmin({ username, password, filter_source, filter_role, search }) {
+        const body = { username, password };
+        if (filter_source) body.filter_source = filter_source;
+        if (filter_role) body.filter_role = filter_role;
+        if (search) body.search = search;
         return await this.request('/feedback/admin/list', {
             method: 'POST',
-            body: { username, password },
+            body,
         });
     }
 

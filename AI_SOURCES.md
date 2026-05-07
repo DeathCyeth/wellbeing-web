@@ -39,7 +39,17 @@ Fine-tuning needs a **labeled dataset** (examples of good answers for your domai
 
 ## Citations on every reply
 
-`server.py` sends a **first system message on every API call** (`AI_CITATION_RULE_DOCTOR` / `AI_CITATION_RULE_PATIENT`) so **every** assistant answer—including short replies and follow-ups—must end with **`Supporting references`** (at least 2 bullets). Edit those constants near `get_ai_advice` to change wording or requirements.
+`server.py` sends a **first system message on every API call** (`AI_CITATION_RULE_DOCTOR` / `AI_CITATION_RULE_PATIENT`) so **every** assistant answer—including short replies and follow-ups—must end with **`Supporting references`** (at least 2 bullets). Those rules also include an **evidence discipline** block: prioritize PubMed/openFDA/web/repository excerpts, ignore off-topic snippets, avoid invented links, and treat calorie/BMR figures as estimates unless derived from explicit patient fields.
+
+Edit those constants near `get_ai_advice` to change wording.
+
+## Literature repository notifications
+
+When a doctor adds a PMID via **`POST /api/literature`**, optional env **`LITERATURE_NOTIFY_WEBHOOK`** mirrors **`FEEDBACK_NOTIFY_WEBHOOK`**: JSON POST for Discord/Zapier/Slack workflows. Listed in **`/api/feedback/config`** as `literature_notify_webhook_configured`.
+
+## Nutrition plan safety pass
+
+`/api/ai/nutrition-plan` returns **`validation_notes`** (array of strings): Mifflin–St Jeor + activity estimates when biometrics exist, plus server clamps so **maintenance** and **weight-loss** calorie strings stay internally consistent with safe floors. Doctor UI renders this block above the plan. Inspect `generate_nutrition_plan` and helpers `_nutrition_*` / `_nutrition_clamp_plan` in **`server.py`**.
 
 ## “Supporting references” (like DoxGPT *in spirit*)
 

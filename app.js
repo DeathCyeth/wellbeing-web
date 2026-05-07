@@ -1297,13 +1297,24 @@ function updateDoctorBMICalculator() {
 }
 
 // ——— Doctor: Personalized Nutrition Plan ———
-function renderNutritionPlanFormatted(plan) {
+function renderNutritionPlanFormatted(plan, validationNotes) {
     if (!plan || typeof plan !== 'object') return '';
     const arr = (v) => (Array.isArray(v) ? v : [v].filter(Boolean));
     const str = (v) => (v != null && v !== '' ? String(v) : '—');
     const list = (items) => arr(items).map(i => `<li>${escapeHtml(str(i))}</li>`).join('');
     const meal = (day, mealName) => str(plan[`day${day}_${mealName}`]);
+    let notesBlock = '';
+    if (validationNotes && validationNotes.length) {
+        const lis = validationNotes.map((n) => `<li>${escapeHtml(String(n))}</li>`).join('');
+        notesBlock =
+            '<div class="np-section" style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
+            '<div class="np-subhead" style="margin-bottom:8px;">Automated checks (estimates & safety)</div>' +
+            '<ul class="np-list" style="margin:0;">' +
+            lis +
+            '</ul></div>';
+    }
     const html = `
+${notesBlock}
 <div class="np-title">Your Personalized Nutrition Plan</div>
 
 <div class="np-section">
@@ -1384,8 +1395,9 @@ async function generateDoctorNutritionPlan() {
         const input = /^\d{6}$/.test(username) ? { patient_id: username } : { username };
         const res = await apiService.generateNutritionPlan(input);
         const plan = res && res.plan;
+        const validationNotes = (res && res.validation_notes) || [];
         if (plan && typeof plan === 'object' && !plan._raw) {
-            const html = renderNutritionPlanFormatted(plan);
+            const html = renderNutritionPlanFormatted(plan, validationNotes);
             if (planFormatted) { planFormatted.innerHTML = html; planFormatted.style.display = 'block'; }
             if (planEl) planEl.style.display = 'none';
             if (printBtn) printBtn.style.display = 'inline';

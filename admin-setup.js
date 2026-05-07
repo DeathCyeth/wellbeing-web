@@ -28,6 +28,11 @@
                     '<code>FEEDBACK_NOTIFY_WEBHOOK</code> is set: each new feedback is also POSTed there as JSON (good for Slack/Zapier).'
                 );
             }
+            if (c.literature_notify_webhook_configured) {
+                parts.push(
+                    '<code>LITERATURE_NOTIFY_WEBHOOK</code> is set: adding a PMID to the repository POSTs JSON there (Discord/Slack/Zapier for team tracking).'
+                );
+            }
             if (c.feedback_email_smtp_configured) {
                 parts.push(
                     '<code>FEEDBACK_EMAIL_TO</code> + SMTP is set: each new feedback is also emailed to that address (in addition to the database).'
