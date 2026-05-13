@@ -20,6 +20,7 @@ import re
 import hmac
 import hashlib
 import urllib.request
+import urllib.error
 import smtplib
 import ssl
 import threading
@@ -559,28 +560,50 @@ def _notify_feedback_webhook(username, role, message, source, ts_ms):
     snippet = (message or "").replace("\r", " ").strip()
     if len(snippet) > 3500:
         snippet = snippet[:3497] + "..."
-    body = json.dumps(
-        {
-            "text": f"[Wellbeing Companion] Feedback\nUser: {username} ({role})\nSource: {source}\nTime: {ts_ms}\n\n{snippet}",
-            "username": username,
-            "role": role,
-            "source": source,
-            "message": message,
-            # Zapier Catch Hook field trees sometimes omit "message"; map Gmail body to this instead.
-            "feedback_body": message,
-            "created_at": ts_ms,
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
+    summary = (
+        f"[Wellbeing Companion] Feedback\nUser: {username} ({role})\nSource: {source}\nTime: {ts_ms}\n\n{snippet}"
+    )
+    payload = {
+        "text": summary,
+        "username": username,
+        "role": role,
+        "source": source,
+        "message": message,
+        # Zapier Catch Hook field trees sometimes omit "message"; map Gmail body to this instead.
+        "feedback_body": message,
+        "created_at": ts_ms,
+    }
+    # Discord incoming webhooks expect "content" (or embeds); "text" alone is ignored.
+    if "discord.com/api/webhooks" in url.lower() or "discordapp.com/api/webhooks" in url.lower():
+        payload["content"] = summary[:1990]
+
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    try:
+        timeout = float((os.environ.get("FEEDBACK_NOTIFY_WEBHOOK_TIMEOUT_SEC") or "25").strip())
+        if timeout < 5 or timeout > 120:
+            timeout = 25.0
+    except ValueError:
+        timeout = 25.0
     try:
         req = urllib.request.Request(
             url,
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json; charset=utf-8"},
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": "WellbeingCompanion/1.0 (+feedback-webhook)",
+            },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read(1024)
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read()[:800].decode("utf-8", errors="replace")
+        except Exception:
+            detail = ""
+        print(
+            f"FEEDBACK_NOTIFY_WEBHOOK HTTP {e.code} for {url[:80]}...: {detail or e.reason}"
+        )
     except Exception as ex:
         print(f"FEEDBACK_NOTIFY_WEBHOOK request failed: {ex}")
 
@@ -2114,31 +2137,49 @@ def _notify_literature_webhook(scope, pmid, added_by, note, patient_username):
     snippet = (note or "").replace("\r", " ").strip()
     if len(snippet) > 800:
         snippet = snippet[:797] + "..."
-    body = json.dumps(
-        {
-            "text": (
-                f"[Wellbeing Companion] Literature repository\n"
-                f"Scope: {scope}\nPMID: {pmid}\n"
-                f"Patient: {patient_username or '—'}\nAdded by: {added_by or '—'}\n"
-                f"Note: {snippet or '—'}"
-            ),
-            "scope": scope,
-            "pmid": pmid,
-            "patient_username": patient_username,
-            "added_by": added_by,
-            "curator_note": note,
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
+    summary = (
+        f"[Wellbeing Companion] Literature repository\n"
+        f"Scope: {scope}\nPMID: {pmid}\n"
+        f"Patient: {patient_username or '—'}\nAdded by: {added_by or '—'}\n"
+        f"Note: {snippet or '—'}"
+    )
+    payload = {
+        "text": summary,
+        "scope": scope,
+        "pmid": pmid,
+        "patient_username": patient_username,
+        "added_by": added_by,
+        "curator_note": note,
+    }
+    if "discord.com/api/webhooks" in url.lower() or "discordapp.com/api/webhooks" in url.lower():
+        payload["content"] = summary[:1990]
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    try:
+        timeout = float((os.environ.get("FEEDBACK_NOTIFY_WEBHOOK_TIMEOUT_SEC") or "25").strip())
+        if timeout < 5 or timeout > 120:
+            timeout = 25.0
+    except ValueError:
+        timeout = 25.0
     try:
         req = urllib.request.Request(
             url,
             data=body,
             method="POST",
-            headers={"Content-Type": "application/json; charset=utf-8"},
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": "WellbeingCompanion/1.0 (+literature-webhook)",
+            },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read(1024)
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read()[:800].decode("utf-8", errors="replace")
+        except Exception:
+            detail = ""
+        print(
+            f"LITERATURE_NOTIFY_WEBHOOK HTTP {e.code} for {url[:80]}...: {detail or e.reason}"
+        )
     except Exception as ex:
         print(f"LITERATURE_NOTIFY_WEBHOOK request failed: {ex}")
 

@@ -189,6 +189,24 @@ You get a home screen icon that opens the app full-screen, same data as the webs
 
 ---
 
+## Feedback email (Zapier → Gmail) troubleshooting
+
+Emails only send **after** feedback is saved successfully (user must be logged in with a valid `feedback_token`, or Zap never runs).
+
+1. **Render → Logs** after submitting feedback: search for **`FEEDBACK_NOTIFY_WEBHOOK`**.  
+   - **`HTTP 4xx/5xx`**: the URL is wrong, revoked, or the receiver rejected the body (copy the log line).  
+   - **`timed out`**: increase **`FEEDBACK_NOTIFY_WEBHOOK_TIMEOUT_SEC`** (default **25** seconds in newer server builds).
+
+2. **Zapier → Zap history**: if there is **no run** when feedback is sent, the webhook URL on Render does not match the Zap’s Catch URL, or feedback never reached the server.
+
+3. **Gmail step red / disconnected**: reconnect Google in Zapier; check **Spam**; map **Body** to **`feedback_body`** or **`message`** from step 1.
+
+4. **Discord webhook URL** (if you use Discord instead of Zapier): Discord ignores Slack-style **`text`** alone — the server now also sends **`content`** for `discord.com/api/webhooks` URLs.
+
+5. **SMTP path** (`FEEDBACK_EMAIL_*`): failures log as **`FEEDBACK email notify failed:`** — fix credentials or use Zapier only.
+
+---
+
 ## If something goes wrong
 
 - **Build fails:** Check the **Logs** tab on Render. Most often it’s a typo in **Build Command** or **Start Command**; compare with the table in Step 2.3.
