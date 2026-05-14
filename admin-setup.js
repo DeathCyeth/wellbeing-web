@@ -45,7 +45,7 @@
             }
             if (!c.feedback_auth_secret_configured) {
                 parts.push(
-                    '<strong>Recommended for production:</strong> set <code>FEEDBACK_AUTH_SECRET</code> (long random value) so in-app feedback keeps working after deploys and across multiple workers. Without it, users may see “feedback session no longer matches the server” until they log out and back in. See <code>PAID_DEPLOYMENT.md</code> Step 2.4b.'
+                    '<strong>Recommended for production:</strong> set <code>FEEDBACK_AUTH_SECRET</code> (long random value) so in-app feedback keeps working after deploys and across multiple workers. Without it, users may need to log out and back in after each deploy. See <code>PAID_DEPLOYMENT.md</code> Step 2.4b.'
                 );
             }
             if (!c.feedback_admin_usernames_configured) {
