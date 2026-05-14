@@ -225,11 +225,13 @@ Emails only send **after** feedback is saved successfully (user must be logged i
 
 2. **Zapier → Zap history**: if there is **no run** when feedback is sent, the webhook URL on Render does not match the Zap’s Catch URL, or feedback never reached the server.
 
-3. **Gmail step red / disconnected**: reconnect Google in Zapier; check **Spam**; map **Body** to **`feedback_body`** or **`message`** from step 1.
+3. **Email body only says “message” or is empty:** In **Gmail → Body**, delete any plain typed text. Click the field and insert from **Catch Hook** one of these (search in the data picker): **`wellbeing_feedback_text`**, **`feedback_body`**, **`feedback_user_text`**, or **`text`** (full summary). Do **not** pick a Gmail field also named “Message” from another step, and do **not** type the word `message` by hand.
 
-4. **Discord webhook URL** (if you use Discord instead of Zapier): Discord ignores Slack-style **`text`** alone — the server now also sends **`content`** for `discord.com/api/webhooks` URLs.
+4. **Gmail step red / disconnected**: reconnect Google in Zapier; check **Spam**; map **Body** using step 3.
 
-5. **SMTP path** (`FEEDBACK_EMAIL_*`): failures log as **`FEEDBACK email notify failed:`** — fix credentials or use Zapier only.
+5. **Discord webhook URL** (if you use Discord instead of Zapier): Discord ignores Slack-style **`text`** alone — the server now also sends **`content`** for `discord.com/api/webhooks` URLs.
+
+6. **SMTP path** (`FEEDBACK_EMAIL_*`): failures log as **`FEEDBACK email notify failed:`** — fix credentials or use Zapier only.
 
 ---
 

@@ -563,14 +563,16 @@ def _notify_feedback_webhook(username, role, message, source, ts_ms):
     summary = (
         f"[Wellbeing Companion] Feedback\nUser: {username} ({role})\nSource: {source}\nTime: {ts_ms}\n\n{snippet}"
     )
+    # Zapier/Gmail: avoid picking a wrong "Message" field — use feedback_body, wellbeing_feedback_text, or text.
     payload = {
         "text": summary,
         "username": username,
         "role": role,
         "source": source,
         "message": message,
-        # Zapier Catch Hook field trees sometimes omit "message"; map Gmail body to this instead.
         "feedback_body": message,
+        "wellbeing_feedback_text": message,
+        "feedback_user_text": message,
         "created_at": ts_ms,
     }
     # Discord incoming webhooks expect "content" (or embeds); "text" alone is ignored.

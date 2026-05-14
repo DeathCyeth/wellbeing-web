@@ -19,6 +19,7 @@
             <p style="color: var(--text-light); font-size: 0.82rem; margin-bottom: 14px;">
                 Other ways to get feedback: <code>FEEDBACK_NOTIFY_WEBHOOK</code> (Slack/Zapier — JSON POST per submission), or email —
                 <code>FEEDBACK_EMAIL_TO</code> plus <code>FEEDBACK_SMTP_HOST</code> / <code>FEEDBACK_SMTP_USER</code> / <code>FEEDBACK_SMTP_PASSWORD</code> (and <code>FEEDBACK_EMAIL_FROM</code>).
+                Zapier → Gmail: map <strong>Body</strong> to <code>wellbeing_feedback_text</code> or <code>feedback_body</code> from Catch Hook (not the typed word “message”).
                 Check flags at <a href="/api/feedback/config" target="_blank" rel="noopener"><code>/api/feedback/config</code></a>.
                 One-time email of <strong>existing</strong> rows: same SMTP env, then run
                 <code style="white-space: normal;">python server.py --email-feedback-backlog</code> on the machine that can reach your database.
