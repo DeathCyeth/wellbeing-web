@@ -82,6 +82,21 @@ Do **not** click **Create Web Service** yet.
 4. **Value:** your API key from [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys) (create one if you haven’t).
 5. Leave **Secret** checked so it’s hidden.
 
+### Step 2.4b – Feedback “session” stability (**strongly recommended**)
+
+If users see *“Your feedback session no longer matches the server”* after a deploy or randomly, the host is missing a **stable signing secret** for feedback tokens.
+
+1. In the same service → **Environment**, click **Add Environment Variable**.  
+   *(If the service already exists: open it in the Render dashboard → **Environment**.)*
+2. **Key:** `FEEDBACK_AUTH_SECRET`
+3. **Value:** a long random string (at least 32 characters). On your PC you can run:  
+   `python -c "import secrets; print(secrets.token_hex(32))"`  
+   Paste the output as the value. Mark as **Secret**.
+4. **Save**, then **Manual Deploy** so all instances pick it up.
+5. Tell users to **log out and log in once** after this change (old tokens were signed with the old key).
+
+Without this variable, the server may use a **temporary** key that changes on **every restart or deploy**, which invalidates saved `feedback_token` values in the browser.
+
 ### Step 2.5 – Create the service (still on free tier)
 
 1. Scroll to the bottom.
@@ -182,6 +197,7 @@ You get a home screen icon that opens the app full-screen, same data as the webs
 - [ ] Code pushed to GitHub (Part 1).
 - [ ] Web Service created on Render with the correct **Build** and **Start** commands (Part 2).
 - [ ] `OPENAI_API_KEY` added if you use AI features (Part 2.4).
+- [ ] `FEEDBACK_AUTH_SECRET` set for stable in-app feedback after deploys (Part 2.4b).
 - [ ] App tested via the Render URL (Part 2.6).
 - [ ] Optional: phone install tested (Safari / Chrome “Add to Home screen” — see **Install on a phone** above).
 - [ ] Instance type changed to **Starter** (or another paid plan) and payment method added if required (Part 3).
@@ -189,11 +205,21 @@ You get a home screen icon that opens the app full-screen, same data as the webs
 
 ---
 
+## Feedback session error (“no longer matches the server”)
+
+That message means the **signed feedback token** in the browser does not match what the server expects—almost always because **`FEEDBACK_AUTH_SECRET` is not set** on Render, so the signing key **changes on every deploy/restart**.
+
+**Fix:** Add **`FEEDBACK_AUTH_SECRET`** (long random string) in Render → **Environment**, save, **redeploy**. Open **`/api/feedback/config`** and confirm **`feedback_auth_secret_configured`** is **`true`**.
+
+**For users right now:** **Log out** → **log in** again, then submit feedback. After you set the secret, they should only need to re-login again **once** after that deploy—not after every future deploy.
+
+---
+
 ## Feedback email (Zapier → Gmail) troubleshooting
 
 Emails only send **after** feedback is saved successfully (user must be logged in with a valid `feedback_token`, or Zap never runs).
 
-1. **Render → Logs** after submitting feedback: search for **`FEEDBACK_NOTIFY_WEBHOOK`**.  
+1. **Render → Logs** after submitting feedback: search for **`FEEDBACK_NOTIFY_WEBHOOK`**.
    - **`HTTP 4xx/5xx`**: the URL is wrong, revoked, or the receiver rejected the body (copy the log line).  
    - **`timed out`**: increase **`FEEDBACK_NOTIFY_WEBHOOK_TIMEOUT_SEC`** (default **25** seconds in newer server builds).
 

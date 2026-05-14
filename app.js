@@ -2204,7 +2204,13 @@ async function submitPatientFeedback() {
     } catch (e) {
         if (statusEl) {
             statusEl.style.color = 'var(--error-color, #ef4444)';
-            statusEl.textContent = e.message || 'Could not send feedback.';
+            let msg = e.message || 'Could not send feedback.';
+            if (msg.includes('feedback session') || msg.includes('FEEDBACK_AUTH_SECRET')) {
+                msg =
+                    'Your login needs a quick refresh: tap Log out, log in again, then send feedback. ' +
+                    'If this happens often after updates, your host should set FEEDBACK_AUTH_SECRET (see deployment guide).';
+            }
+            statusEl.textContent = msg;
         }
     }
 }
@@ -2241,7 +2247,13 @@ async function submitDoctorFeedback() {
     } catch (e) {
         if (statusEl) {
             statusEl.style.color = 'var(--error-color, #ef4444)';
-            statusEl.textContent = e.message || 'Could not send feedback.';
+            let msg = e.message || 'Could not send feedback.';
+            if (msg.includes('feedback session') || msg.includes('FEEDBACK_AUTH_SECRET')) {
+                msg =
+                    'Your login needs a quick refresh: tap Log out, log in again, then send feedback. ' +
+                    'If this happens often after updates, your host should set FEEDBACK_AUTH_SECRET (see deployment guide).';
+            }
+            statusEl.textContent = msg;
         }
     }
 }
