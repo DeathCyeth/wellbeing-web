@@ -79,6 +79,9 @@ class ApiService {
                 const error = new Error(errorMsg);
                 error.response = data;
                 error.status = response.status;
+                if (data.code) {
+                    error.code = data.code;
+                }
                 throw error;
             }
             

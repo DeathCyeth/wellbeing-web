@@ -1119,20 +1119,15 @@ def feedback_submit():
         else:
             return jsonify(
                 {
-                    "error": (
-                        "Your feedback session no longer matches the server (common right after a deploy, or when "
-                        "FEEDBACK_AUTH_SECRET is not set on the host). Log out and log back in, then try again. "
-                        "Operators: set FEEDBACK_AUTH_SECRET on Render so sessions survive restarts and match all instances."
-                    )
+                    "error": "Please log out, log in again, then try sending feedback.",
+                    "code": "feedback_token_invalid",
                 }
             ), 401
     else:
         return jsonify(
             {
-                "error": (
-                    "Missing feedback session. Log out and log in once so the app can refresh your session, "
-                    "then submit feedback."
-                )
+                "error": "Log in again to send feedback (session not loaded).",
+                "code": "feedback_token_missing",
             }
         ), 401
     role_l = _norm(user.get("role") or "").lower()

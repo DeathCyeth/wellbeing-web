@@ -84,7 +84,7 @@ Do **not** click **Create Web Service** yet.
 
 ### Step 2.4b – Feedback “session” stability (**strongly recommended**)
 
-If users see *“Your feedback session no longer matches the server”* after a deploy or randomly, the host is missing a **stable signing secret** for feedback tokens.
+If users are asked to **log out and log in again** before every feedback send after deploys, the host is missing a **stable signing secret** for feedback tokens.
 
 1. In the same service → **Environment**, click **Add Environment Variable**.  
    *(If the service already exists: open it in the Render dashboard → **Environment**.)*
