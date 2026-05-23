@@ -2774,7 +2774,12 @@ def serve_static(filename):
             return "", 404
         return send_from_directory(BASE_DIR, "admin-setup.html")
     if filename in ALLOWED_STATIC:
-        return send_from_directory(BASE_DIR, filename)
+        resp = send_from_directory(BASE_DIR, filename)
+        if filename in ('app.js', 'styles.css', 'api-service.js', 'index.html'):
+            resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            resp.headers['Pragma'] = 'no-cache'
+            resp.headers['Expires'] = '0'
+        return resp
     return '', 404
 
 

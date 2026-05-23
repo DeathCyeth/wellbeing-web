@@ -476,6 +476,96 @@ body {
     margin-bottom: 6px;
 }
 
+/* Fail-safe: cap visible sources at 2 until the details panel is opened */
+.ai-references-block > ul:first-of-type > li:nth-child(n+3) {
+    display: none;
+}
+
+.ai-references-block:has(.ai-sources-details[open]) > ul:first-of-type > li:nth-child(n+3) {
+    display: list-item;
+}
+
+.ai-references-collapsible .ai-references-more {
+    display: none !important;
+    margin-top: 0;
+}
+
+.ai-references-collapsible.is-expanded .ai-references-more {
+    display: block !important;
+}
+
+.ai-sources-details:not([open]) > ul {
+    display: none;
+}
+
+.ai-sources-details[open] > ul {
+    display: block;
+}
+
+.ai-sources-details {
+    margin-top: 8px;
+}
+
+.ai-sources-details > summary {
+    list-style: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--card-bg, #fff);
+    color: var(--primary-color);
+}
+
+.ai-sources-details > summary::-webkit-details-marker {
+    display: none;
+}
+
+.ai-sources-details > summary:hover {
+    background: rgba(99, 102, 241, 0.08);
+    border-color: var(--primary-color);
+}
+
+.ai-sources-details[open] > summary .ai-sources-show-more-icon {
+    display: inline-block;
+    transform: rotate(180deg);
+}
+
+.ai-sources-details ul {
+    margin: 8px 0 0 1.1rem;
+    padding: 0;
+}
+
+.ai-sources-show-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 8px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    background: var(--card-bg, #fff);
+    color: var(--primary-color);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.ai-sources-show-more:hover {
+    background: rgba(99, 102, 241, 0.08);
+    border-color: var(--primary-color);
+}
+
+.ai-sources-show-more-icon {
+    display: block;
+    margin-top: 1px;
+}
+
 .lit-list .lit-row {
     display: flex;
     flex-wrap: wrap;

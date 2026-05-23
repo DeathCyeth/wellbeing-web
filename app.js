@@ -1,4 +1,5 @@
 // Main Application Logic
+window.WELLBEING_APP_JS_VERSION = '5.3';
 
 // Current user state
 let currentUser = null;
@@ -17,6 +18,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function initializeApp() {
+    console.log('Wellbeing app.js version:', window.WELLBEING_APP_JS_VERSION);
     console.log('Initializing app...');
     
     // Check if user is already logged in (from localStorage)
@@ -1174,11 +1176,9 @@ function updateConversationDisplay() {
                 </div>
             `;
         } else if (msg.role === 'assistant') {
-            const refsHtml = formatReferencesHtml(msg.references);
             html += `
                 <div class="ai-message ai-assistant-message">
-                    <strong>AI:</strong> ${formatAssistantMessageHtml(msg.content)}
-                    ${refsHtml}
+                    <strong>AI:</strong> ${formatAssistantReplyHtml(msg.content, msg.references)}
                 </div>
             `;
         }
@@ -1191,6 +1191,7 @@ function updateConversationDisplay() {
     
     html += '</div>';
     responseDiv.innerHTML = html;
+    finalizeAiReferenceBlocks(responseDiv);
 }
 
 // Clear conversation (optional - can add a button for this)
@@ -1475,9 +1476,10 @@ function updateDoctorAIDisplay() {
         if (msg.role === 'user') {
             return '<div class="doctor-ai-line doctor-ai-user-line"><strong>You:</strong> ' + escapeHtml(msg.content || '').replace(/\n/g, '<br>') + '</div>';
         }
-        return '<div class="doctor-ai-line doctor-ai-assistant-line"><strong>AI:</strong> ' + formatAssistantMessageHtml(msg.content || '') + formatReferencesHtml(msg.references) + '</div>';
+        return '<div class="doctor-ai-line doctor-ai-assistant-line"><strong>AI:</strong> ' + formatAssistantReplyHtml(msg.content || '', msg.references) + '</div>';
     });
     el.innerHTML = blocks.join('');
+    finalizeAiReferenceBlocks(el);
 }
 
 async function sendDoctorAIMessage() {
@@ -1568,23 +1570,82 @@ async function showDoctorHome() {
     updatePwaInstallButtonVisibility();
 }
 
+var AI_SOURCES_VISIBLE_COUNT = 2;
+
+function formatPubMedReferenceLi(r, includeApa) {
+    const line = escapeHtml(r.citation_short || r.title || ('PMID ' + r.pmid));
+    const apa = (includeApa && r.citation_apa)
+        ? '<div style="font-size:0.8rem;color:var(--text-light);margin-top:4px;">' + escapeHtml(r.citation_apa) + '</div>'
+        : '';
+    let url = (r.url || '').trim();
+    try {
+        url = new URL(url).href.replace(/"/g, '&quot;');
+    } catch (e) {
+        url = '';
+    }
+    const link = url ? ' <a href="' + url + '" target="_blank" rel="noopener noreferrer">PubMed</a>' : '';
+    return '<li>' + line + link + apa + '</li>';
+}
+
+function formatCollapsibleSourcesHtml(title, itemHtmlList) {
+    if (!itemHtmlList || !itemHtmlList.length) return '';
+    const visible = itemHtmlList.slice(0, AI_SOURCES_VISIBLE_COUNT);
+    const hidden = itemHtmlList.slice(AI_SOURCES_VISIBLE_COUNT);
+    let html = '<div class="ai-references-block ai-references-collapsible"><strong>' + escapeHtml(title) + '</strong><ul>';
+    html += visible.join('');
+    html += '</ul>';
+    if (hidden.length) {
+        const expandLabel = 'Show ' + hidden.length + ' more source' + (hidden.length === 1 ? '' : 's');
+        html += '<details class="ai-sources-details">';
+        html += '<summary class="ai-sources-summary" aria-label="' + escapeHtml(expandLabel) + '" title="' + escapeHtml(expandLabel) + '"><span class="ai-sources-show-more-icon" aria-hidden="true">▾</span></summary>';
+        html += '<ul>' + hidden.join('') + '</ul>';
+        html += '</details>';
+    }
+    html += '</div>';
+    return html;
+}
+
 function formatReferencesHtml(refs) {
     if (!refs || !refs.length) return '';
-    const lis = refs.map(function (r) {
-        const line = escapeHtml(r.citation_short || r.title || ('PMID ' + r.pmid));
-        const apa = r.citation_apa
-            ? '<div style="font-size:0.8rem;color:var(--text-light);margin-top:4px;">' + escapeHtml(r.citation_apa) + '</div>'
-            : '';
-        let url = (r.url || '').trim();
-        try {
-            url = new URL(url).href.replace(/"/g, '&quot;');
-        } catch (e) {
-            url = '';
-        }
-        const link = url ? ' <a href="' + url + '" target="_blank" rel="noopener noreferrer">PubMed</a>' : '';
-        return '<li>' + line + link + apa + '</li>';
-    }).join('');
-    return '<div class="ai-references-block"><strong>Literature sources (this reply)</strong><ul>' + lis + '</ul></div>';
+    const items = refs.map(function (r, i) {
+        return formatPubMedReferenceLi(r, i >= AI_SOURCES_VISIBLE_COUNT);
+    });
+    return formatCollapsibleSourcesHtml('Literature sources', items);
+}
+
+function getDirectChildUl(el) {
+    if (!el || !el.children) return null;
+    for (var i = 0; i < el.children.length; i++) {
+        if (el.children[i].tagName === 'UL') return el.children[i];
+    }
+    return null;
+}
+
+function finalizeAiReferenceBlocks(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('.ai-references-block').forEach(function (block) {
+        if (block.querySelector('.ai-sources-details')) return;
+        const firstUl = getDirectChildUl(block);
+        if (!firstUl) return;
+        const items = Array.prototype.slice.call(firstUl.children).filter(function (el) {
+            return el.tagName === 'LI';
+        });
+        if (items.length <= AI_SOURCES_VISIBLE_COUNT) return;
+        const hidden = items.slice(AI_SOURCES_VISIBLE_COUNT);
+        const expandLabel = 'Show ' + hidden.length + ' more source' + (hidden.length === 1 ? '' : 's');
+        const details = document.createElement('details');
+        details.className = 'ai-sources-details';
+        const summary = document.createElement('summary');
+        summary.className = 'ai-sources-summary';
+        summary.setAttribute('aria-label', expandLabel);
+        summary.title = expandLabel;
+        summary.innerHTML = '<span class="ai-sources-show-more-icon" aria-hidden="true">▾</span>';
+        const ul = document.createElement('ul');
+        hidden.forEach(function (li) { ul.appendChild(li); });
+        details.appendChild(summary);
+        details.appendChild(ul);
+        block.appendChild(details);
+    });
 }
 
 async function loadDoctorLiterature() {
@@ -2352,13 +2413,182 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-/**
- * Turn assistant text into safe HTML: escape first, then markdown links [label](url) -> <a>.
- * Only http/https URLs allowed. Then linkify bare https? URLs outside of <a> tags. Newlines -> <br>.
- */
-function formatAssistantMessageHtml(text) {
-    if (text == null || text === '') return '';
-    let s = escapeHtml(String(text));
+var REFERENCE_SECTION_HEADING_RE = /(?:^|\n)\s*(?:#{1,3}\s*)?(?:\*{0,2}\s*)?(?:(?:Literature\s+sources(?:\s*\([^)]*\))?)|(?:(?:Supporting\s+)?(?:references|sources|citations)))(?:\*{0,2})?\s*:?\s*(?:\n|$)/i;
+var REFERENCE_SECTION_HEADING_HTML_RE = /(<br>\s*)*(?:\*{1,2}\s*)?(?:(?:Literature\s+sources(?:\s*\([^)]*\))?)|(?:(?:Supporting\s+)?(?:references|sources|citations)))(?:\*{1,2})?\s*:?\s*<br>/i;
+var REFERENCE_BULLET_LINE_RE = /^\s*(?:[-*•‣▪–—]|\d+[.)])\s+(.+)$/;
+
+function normalizeNewlines(text) {
+    return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function findReferenceSectionIndex(text) {
+    const raw = normalizeNewlines(text);
+    const patterns = [
+        REFERENCE_SECTION_HEADING_RE,
+        /(?:^|\n)\s*(?:\*{0,2}\s*)?Literature\s+sources(?:\s*\([^)]*\))?(?:\*{0,2})?\s*:?\s*(?:\n|$)/i
+    ];
+    let best = -1;
+    patterns.forEach(function (re) {
+        const idx = raw.search(re);
+        if (idx >= 0 && (best < 0 || idx < best)) best = idx;
+    });
+    return best;
+}
+
+var REFERENCE_STRIP_MARKERS = [
+    '**supporting references**',
+    'supporting references',
+    '**literature sources (this reply)**',
+    'literature sources (this reply)',
+    '**literature sources**',
+    'literature sources'
+];
+
+function stripReferenceSectionFromText(text) {
+    const raw = normalizeNewlines(text);
+    const lower = raw.toLowerCase();
+    let cut = -1;
+    REFERENCE_STRIP_MARKERS.forEach(function (marker) {
+        const idx = lower.indexOf(marker);
+        if (idx >= 0 && (cut < 0 || idx < cut)) cut = idx;
+    });
+    if (cut < 0) {
+        const idx = findReferenceSectionIndex(raw);
+        if (idx < 0) return raw;
+        cut = idx;
+    }
+    return raw.slice(0, cut).replace(/\s+$/, '');
+}
+
+function stripReferenceSectionFromHtml(html) {
+    if (!html) return html;
+    const lower = html.toLowerCase();
+    let cut = -1;
+    REFERENCE_STRIP_MARKERS.forEach(function (marker) {
+        const idx = lower.indexOf(marker);
+        if (idx >= 0 && (cut < 0 || idx < cut)) cut = idx;
+    });
+    if (cut < 0) {
+        const patterns = [
+            REFERENCE_SECTION_HEADING_HTML_RE,
+            /(<br>\s*)*(?:\*{1,2}\s*)?Literature\s+sources(?:\s*\([^)]*\))?(?:\*{1,2})?\s*:?\s*<br>/i
+        ];
+        patterns.forEach(function (re) {
+            const idx = html.search(re);
+            if (idx >= 0 && (cut < 0 || idx < cut)) cut = idx;
+        });
+    }
+    if (cut < 0) return html;
+    let start = cut;
+    const brBefore = html.lastIndexOf('<br>', cut);
+    if (brBefore >= 0) start = brBefore;
+    return html.slice(0, start).replace(/(<br>\s*)+$/i, '');
+}
+
+function extractTrailingReferenceBulletsFromHtml(html) {
+    if (!html) return { html: html, items: [] };
+    const parts = html.split('<br>');
+    const trailing = [];
+    let cutAt = parts.length;
+    for (let i = parts.length - 1; i >= 0; i--) {
+        const t = parts[i].trim();
+        if (!t) continue;
+        const isBullet = /^(?:[-*•‣▪–—]|\d+[.)])\s/.test(t);
+        const isLink = /^<a\s/i.test(t);
+        const isPubmed = /pubmed\.ncbi\.nlm\.nih\.gov/i.test(t);
+        if (isBullet || isLink || isPubmed) {
+            trailing.unshift(t.replace(/^(?:[-*•‣▪–—]|\d+[.)])\s+/, ''));
+            cutAt = i;
+        } else {
+            break;
+        }
+    }
+    if (trailing.length < 2) return { html: html, items: [] };
+    return {
+        html: parts.slice(0, cutAt).join('<br>').replace(/(<br>\s*)+$/i, ''),
+        items: trailing
+    };
+}
+
+function parseReferenceBulletLine(line) {
+    const trimmed = (line || '').trim();
+    if (!trimmed) return null;
+    const marked = trimmed.match(REFERENCE_BULLET_LINE_RE);
+    return marked ? marked[1].trim() : trimmed;
+}
+
+function splitSupportingReferencesSection(text) {
+    const raw = normalizeNewlines(text);
+    let body = raw;
+    let bullets = [];
+
+    const headingMatch = raw.match(REFERENCE_SECTION_HEADING_RE);
+    if (headingMatch) {
+        const idx = raw.search(REFERENCE_SECTION_HEADING_RE);
+        body = raw.slice(0, idx).replace(/\s+$/, '');
+        const afterHeading = raw.slice(idx + headingMatch[0].length);
+        afterHeading.split('\n').forEach(function (line) {
+            const item = parseReferenceBulletLine(line);
+            if (item) bullets.push(item);
+        });
+    }
+
+    if (!bullets.length) {
+        const fallback = extractTrailingReferenceBullets(body);
+        body = fallback.body;
+        bullets = fallback.bullets;
+    }
+
+    return { body: body, bullets: bullets };
+}
+
+function extractTrailingReferenceBullets(body) {
+    const lines = normalizeNewlines(body).split('\n');
+    const trailing = [];
+    let cutAt = lines.length;
+    for (let i = lines.length - 1; i >= 0; i--) {
+        const item = parseReferenceBulletLine(lines[i]);
+        if (!item) {
+            if (!lines[i].trim()) {
+                continue;
+            }
+            break;
+        }
+        trailing.unshift(item);
+        cutAt = i;
+    }
+    if (trailing.length < 2) {
+        return { body: body, bullets: [] };
+    }
+    const kept = lines.slice(0, cutAt).join('\n').replace(/\s+$/, '');
+    return { body: kept, bullets: trailing };
+}
+
+function extractReferencesSectionFromHtml(html) {
+    if (!html) return { html: html, items: [] };
+    const match = html.match(REFERENCE_SECTION_HEADING_HTML_RE);
+    if (!match) return { html: html, items: [] };
+    const idx = html.search(REFERENCE_SECTION_HEADING_HTML_RE);
+    const before = html.slice(0, idx).replace(/(<br>\s*)+$/i, '');
+    let after = html.slice(idx + match[0].length);
+    const items = [];
+    after.split('<br>').forEach(function (part) {
+        const t = part.trim();
+        if (!t) return;
+        const cleaned = t.replace(/^(?:[-*•‣▪–—]|\d+[.)])\s+/, '');
+        if (cleaned) items.push(cleaned);
+    });
+    return { html: before, items: items };
+}
+
+function formatReferenceListItemHtml(item) {
+    if (/<[a-z][\s>]/i.test(item)) {
+        return '<li>' + item + '</li>';
+    }
+    return '<li>' + linkifyEscapedAssistantText(escapeHtml(item)) + '</li>';
+}
+
+function linkifyEscapedAssistantText(s) {
     s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, function (_m, label, url) {
         try {
             const u = new URL(url);
@@ -2370,7 +2600,7 @@ function formatAssistantMessageHtml(text) {
         }
     });
     const parts = s.split(/(<a\s[^>]*>[\s\S]*?<\/a>)/gi);
-    s = parts.map(function (chunk) {
+    return parts.map(function (chunk) {
         if (/^<a\s/i.test(chunk)) return chunk;
         return chunk.replace(/(https?:\/\/[^\s<]+)/gi, function (raw) {
             try {
@@ -2386,6 +2616,57 @@ function formatAssistantMessageHtml(text) {
             }
         });
     }).join('');
+}
+
+function formatSupportingReferencesBlockHtml(bullets) {
+    if (!bullets || !bullets.length) return '';
+    const items = bullets.map(formatReferenceListItemHtml);
+    return formatCollapsibleSourcesHtml('Sources', items);
+}
+
+function formatBodyHtml(text) {
+    if (text == null || text === '') return '';
+    let s = escapeHtml(text);
+    s = linkifyEscapedAssistantText(s);
     return s.replace(/\n/g, '<br>');
+}
+
+/**
+ * Turn assistant text into safe HTML (nutrition plan etc.). Chat uses formatAssistantReplyHtml.
+ */
+function formatAssistantMessageHtml(text) {
+    if (text == null || text === '') return '';
+    const split = splitSupportingReferencesSection(normalizeNewlines(text));
+    return formatBodyHtml(split.body);
+}
+
+function formatAssistantReplyHtml(content, references) {
+    const normalized = normalizeNewlines(content);
+    const pubmedRefs = Array.isArray(references) ? references : [];
+
+    const split = splitSupportingReferencesSection(normalized);
+    let refItems = split.bullets;
+
+    let bodyText = stripReferenceSectionFromText(normalized);
+    let bodyHtml = formatBodyHtml(bodyText);
+    bodyHtml = stripReferenceSectionFromHtml(bodyHtml);
+
+    if (!refItems.length) {
+        const fromHtml = extractReferencesSectionFromHtml(formatBodyHtml(normalized));
+        refItems = fromHtml.items;
+    }
+    if (!refItems.length) {
+        const trailing = extractTrailingReferenceBulletsFromHtml(bodyHtml);
+        bodyHtml = trailing.html;
+        refItems = trailing.items;
+    }
+
+    let html = bodyHtml;
+    if (pubmedRefs.length) {
+        html += formatReferencesHtml(pubmedRefs);
+    } else if (refItems.length) {
+        html += formatSupportingReferencesBlockHtml(refItems);
+    }
+    return html;
 }
 
