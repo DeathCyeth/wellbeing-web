@@ -176,6 +176,7 @@ ALLOWED_STATIC = {
     'styles.css',
     'app.js',
     'admin.js',
+    'admin-ai-log.js',
     'admin-setup.js',
     'api-service.js',
     'logo.png',
@@ -333,6 +334,29 @@ def init_db():
             created_at INTEGER NOT NULL
         )
     """)
+    run_execute(cursor, """
+        CREATE TABLE IF NOT EXISTS ai_chat_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            display_name TEXT,
+            role TEXT,
+            context_username TEXT,
+            source TEXT,
+            question TEXT NOT NULL,
+            response TEXT,
+            references_json TEXT,
+            model TEXT,
+            success INTEGER NOT NULL DEFAULT 1,
+            error_message TEXT,
+            had_image INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    try:
+        run_execute(cursor,
+            "CREATE INDEX IF NOT EXISTS idx_ai_chat_log_created ON ai_chat_log(created_at DESC)")
+    except (sqlite3.OperationalError, Exception):
+        pass
     conn.commit()
     conn.close()
 
@@ -405,6 +429,27 @@ def init_db_pg():
             created_at BIGINT NOT NULL
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_chat_log (
+            id SERIAL PRIMARY KEY,
+            created_at BIGINT NOT NULL,
+            username VARCHAR(255) NOT NULL,
+            display_name VARCHAR(255),
+            role VARCHAR(64),
+            context_username VARCHAR(255),
+            source VARCHAR(32),
+            question TEXT NOT NULL,
+            response TEXT,
+            references_json TEXT,
+            model VARCHAR(128),
+            success INTEGER NOT NULL DEFAULT 1,
+            error_message TEXT,
+            had_image INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_chat_log_created ON ai_chat_log (created_at DESC)"
+    )
     conn.commit()
     conn.close()
     print("PostgreSQL tables initialized (shared DB for all devices)")
@@ -814,6 +859,62 @@ def _can_view_feedback_admin(user):
     if not admins:
         return False
     return _norm(user.get("username") or "").lower() in admins
+
+
+def _insert_ai_chat_log(
+    *,
+    username,
+    display_name,
+    role,
+    context_username,
+    source,
+    question,
+    response=None,
+    references=None,
+    model=None,
+    success=True,
+    error_message=None,
+    had_image=False,
+):
+    """Persist one AI Q&A for admin review. Never raises — logging must not break chat."""
+    try:
+        ts_ms = int(datetime.now().timestamp() * 1000)
+        refs_json = None
+        if references is not None:
+            try:
+                refs_json = json.dumps(references, ensure_ascii=False)
+            except (TypeError, ValueError):
+                refs_json = None
+        conn = get_conn()
+        cursor = conn.cursor()
+        run_execute(
+            cursor,
+            """
+            INSERT INTO ai_chat_log (
+                created_at, username, display_name, role, context_username, source,
+                question, response, references_json, model, success, error_message, had_image
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts_ms,
+                username or "",
+                display_name or "",
+                role or "",
+                context_username or "",
+                source or "",
+                question or "",
+                response or "",
+                refs_json,
+                model or "",
+                1 if success else 0,
+                (error_message or "")[:4000],
+                1 if had_image else 0,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as ex:
+        print(f"ai_chat_log insert failed: {ex}")
 
 
 def _strip_wrapping_quotes_value(val):
@@ -1228,6 +1329,84 @@ def feedback_admin_list():
         }
         for r in rows
     ]
+    return jsonify({"items": items, "count": len(items)})
+
+
+@app.route("/api/ai/admin/list", methods=["POST"])
+def ai_chat_admin_list():
+    """List saved AI Q&A for admins (same auth as feedback admin)."""
+    data = request.get_json() or {}
+    user = _verify_user_credentials(data.get("username"), data.get("password"))
+    if not user:
+        return jsonify({"error": "Invalid username or password"}), 401
+    if not _can_view_feedback_admin(user):
+        return jsonify(
+            {
+                "error": "Not authorized. Set FEEDBACK_ADMIN_USERNAMES on the server (comma-separated "
+                "usernames) or use an account with role Admin."
+            }
+        ), 403
+
+    filt_src = _norm(data.get("filter_source") or "").lower()
+    errors_only = bool(data.get("errors_only"))
+    search = _norm(data.get("search") or "").lower()
+
+    clauses = []
+    params = []
+    if filt_src in ("patient", "doctor"):
+        clauses.append("LOWER(TRIM(COALESCE(source,'')))=?")
+        params.append(filt_src)
+    if errors_only:
+        clauses.append("(success=0 OR TRIM(COALESCE(error_message,''))<>'')")
+    if search:
+        like = "%" + search.replace("%", "").replace("_", "") + "%"
+        clauses.append(
+            "(LOWER(COALESCE(question,'')) LIKE ? OR LOWER(COALESCE(response,'')) LIKE ? "
+            "OR LOWER(COALESCE(error_message,'')) LIKE ? OR LOWER(COALESCE(username,'')) LIKE ?)"
+        )
+        params.extend([like, like, like, like])
+
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = (
+        "SELECT id, created_at, username, display_name, role, context_username, source, "
+        "question, response, references_json, model, success, error_message, had_image "
+        "FROM ai_chat_log"
+        + where_sql
+        + " ORDER BY created_at DESC LIMIT 500"
+    )
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(cursor, sql, tuple(params))
+    rows = cursor.fetchall()
+    conn.close()
+
+    items = []
+    for r in rows:
+        refs = []
+        if r[9]:
+            try:
+                refs = json.loads(r[9])
+            except (TypeError, ValueError):
+                refs = []
+        items.append(
+            {
+                "id": r[0],
+                "created_at": r[1],
+                "username": r[2],
+                "display_name": r[3] or "",
+                "role": r[4] or "",
+                "context_username": r[5] or "",
+                "source": r[6] or "",
+                "question": r[7] or "",
+                "response": r[8] or "",
+                "references": refs,
+                "references_count": len(refs) if isinstance(refs, list) else 0,
+                "model": r[10] or "",
+                "success": bool(r[11]),
+                "error_message": r[12] or "",
+                "had_image": bool(r[13]),
+            }
+        )
     return jsonify({"items": items, "count": len(items)})
 
 
@@ -2350,6 +2529,13 @@ def get_ai_advice():
     patient_context = data.get('patient_context', '')  # optional summary when doctor has patient loaded
     # Patient login username: links global + patient-specific PubMed repository into AI context
     context_username = _norm(data.get('context_username') or '').lower()
+    acting_username = _norm(data.get('username') or context_username or 'unknown').lower()
+    role_norm = _norm(role or '').lower()
+    chat_source = 'doctor' if role_norm == 'doctor' else 'patient'
+    has_image_flag = bool(image and str(image).startswith('data:image'))
+    log_question = question
+    if has_image_flag:
+        log_question = ((question or '') + ' [image attached]').strip() or '[image attached]'
 
     if not question and not image:
         return jsonify({"error": "Question or image is required"}), 400
@@ -2548,11 +2734,40 @@ Provide helpful, personalized advice that takes into account the user's preferen
             except Exception as e:
                 print(f'pubmed_references_for_pmids error: {e}')
 
+        _insert_ai_chat_log(
+            username=acting_username,
+            display_name=_norm(user_name or ''),
+            role=role_norm or chat_source,
+            context_username=context_username,
+            source=chat_source,
+            question=log_question,
+            response=response_text,
+            references=references,
+            model=model,
+            success=True,
+            had_image=has_image_flag,
+        )
+
         return jsonify({"response": response_text, "references": references})
 
     except Exception as e:
-        print(f"OpenAI API error: {str(e)}")
-        return jsonify({"error": f"AI service error: {str(e)}"}), 500
+        err_msg = str(e)
+        print(f"OpenAI API error: {err_msg}")
+        _insert_ai_chat_log(
+            username=acting_username,
+            display_name=_norm(user_name or ''),
+            role=role_norm or chat_source,
+            context_username=context_username,
+            source=chat_source,
+            question=log_question,
+            response=None,
+            references=None,
+            model=locals().get('model', ''),
+            success=False,
+            error_message=err_msg,
+            had_image=has_image_flag,
+        )
+        return jsonify({"error": f"AI service error: {err_msg}"}), 500
 
 
 @app.route('/api/ai/nutrition-plan', methods=['POST'])

@@ -1,5 +1,5 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '5.3';
+window.WELLBEING_APP_JS_VERSION = '5.4';
 
 // Current user state
 let currentUser = null;
@@ -221,6 +221,14 @@ function setupEventListeners() {
     const doctorNutritionPlanPrintBtn = document.getElementById('doctorNutritionPlanPrintBtn');
     if (doctorNutritionPlanPrintBtn) {
         doctorNutritionPlanPrintBtn.addEventListener('click', () => printNutritionPlan());
+    }
+    const patientAiPrintBtn = document.getElementById('patientAiPrintBtn');
+    if (patientAiPrintBtn) {
+        patientAiPrintBtn.addEventListener('click', () => printPatientAiRecommendations());
+    }
+    const doctorAiPrintBtn = document.getElementById('doctorAiPrintBtn');
+    if (doctorAiPrintBtn) {
+        doctorAiPrintBtn.addEventListener('click', () => printDoctorAiRecommendations());
     }
     // Doctor: BMI/BMR Calculate button
     const doctorBMICalculateBtn = document.getElementById('doctorBMICalculateBtn');
@@ -1064,6 +1072,7 @@ window.getAIAdvice = async function getAIAdvice() {
             imageDataUrl,
             null,
             '',
+            currentUser.username,
             currentUser.username
         );
         
@@ -1192,6 +1201,128 @@ function updateConversationDisplay() {
     html += '</div>';
     responseDiv.innerHTML = html;
     finalizeAiReferenceBlocks(responseDiv);
+    updatePatientAiPrintButtonVisibility();
+}
+
+function hasAiPrintableContent(history) {
+    return Array.isArray(history) && history.some(function (m) {
+        return m.role === 'assistant' && String(m.content || '').trim();
+    });
+}
+
+function updatePatientAiPrintButtonVisibility() {
+    const btn = document.getElementById('patientAiPrintBtn');
+    if (!btn) return;
+    btn.style.display = hasAiPrintableContent(aiConversationHistory) ? 'inline-block' : 'none';
+}
+
+function updateDoctorAiPrintButtonVisibility() {
+    const btn = document.getElementById('doctorAiPrintBtn');
+    if (!btn) return;
+    btn.style.display = hasAiPrintableContent(doctorAIConversationHistory) ? 'inline-block' : 'none';
+}
+
+function buildAiPrintBodyHtml(messages) {
+    if (!messages || !messages.length) return '';
+    return messages.map(function (msg) {
+        if (msg.role === 'user') {
+            const imgNote = msg.image ? '<p class="ai-print-meta">[Image attached to this question]</p>' : '';
+            return (
+                '<section class="ai-print-exchange">' +
+                '<div class="ai-print-label">Your question</div>' +
+                '<div class="ai-print-user">' + escapeHtml(msg.content || '').replace(/\n/g, '<br>') + imgNote + '</div>' +
+                '</section>'
+            );
+        }
+        if (msg.role === 'assistant') {
+            return (
+                '<section class="ai-print-exchange">' +
+                '<div class="ai-print-label">AI recommendation</div>' +
+                '<div class="ai-print-assistant">' + formatAssistantReplyHtml(msg.content || '', msg.references) + '</div>' +
+                '</section>'
+            );
+        }
+        return '';
+    }).join('');
+}
+
+function printAiRecommendations(messages, options) {
+    options = options || {};
+    if (!hasAiPrintableContent(messages)) {
+        showToast('Nothing to print yet — ask the AI a question first', 'error');
+        return;
+    }
+    const title = options.title || 'AI Recommendations';
+    const subtitle = options.subtitle || 'Wellbeing Companion';
+    const metaLines = (options.metaLines || []).filter(Boolean);
+    const printedAt = new Date().toLocaleString();
+    const bodyHtml = buildAiPrintBodyHtml(messages);
+
+    const win = window.open('', '_blank');
+    if (!win) {
+        showToast('Allow popups to print', 'error');
+        return;
+    }
+    const metaHtml = metaLines.map(function (line) {
+        return '<p class="ai-print-meta-line">' + escapeHtml(line) + '</p>';
+    }).join('');
+
+    win.document.write(
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + escapeHtml(title) + '</title>' +
+        '<style>' +
+        'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; max-width: 800px; margin: 0 auto; font-size: 14px; line-height: 1.55; color: #1a1a1a; }' +
+        'h1 { font-size: 1.35rem; color: #1e3a5f; margin: 0 0 6px 0; text-align: center; }' +
+        '.ai-print-subtitle { text-align: center; color: #555; margin: 0 0 8px 0; font-size: 0.95rem; }' +
+        '.ai-print-meta-line { text-align: center; color: #666; margin: 2px 0; font-size: 0.85rem; }' +
+        '.ai-print-exchange { margin-bottom: 22px; page-break-inside: avoid; }' +
+        '.ai-print-label { font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #1e3a5f; margin-bottom: 8px; }' +
+        '.ai-print-user { padding: 12px 14px; background: #f0f4ff; border-radius: 8px; border: 1px solid #d8dff7; }' +
+        '.ai-print-assistant { padding: 12px 14px; background: #fff; border-radius: 8px; border: 1px solid #ddd; }' +
+        '.ai-print-meta { font-size: 0.85rem; color: #666; margin: 8px 0 0 0; font-style: italic; }' +
+        '.ai-references-block { margin-top: 12px; padding: 10px 12px; font-size: 0.85rem; background: #f8f9fc; border: 1px solid #ddd; border-radius: 6px; }' +
+        '.ai-references-block ul { margin: 6px 0 0 1.1rem; padding: 0; }' +
+        '.ai-references-block li { margin-bottom: 4px; }' +
+        '.ai-sources-details > summary { display: none !important; }' +
+        '.ai-sources-details > ul { display: block !important; }' +
+        '.ai-references-block > ul:first-of-type > li { display: list-item !important; }' +
+        'a { color: #1e3a5f; }' +
+        '.ai-print-footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid #ccc; font-size: 0.75rem; color: #666; }' +
+        '@media print { body { padding: 12px; } }' +
+        '</style></head><body>' +
+        '<h1>' + escapeHtml(title) + '</h1>' +
+        '<p class="ai-print-subtitle">' + escapeHtml(subtitle) + '</p>' +
+        metaHtml +
+        '<p class="ai-print-meta-line">Printed ' + escapeHtml(printedAt) + '</p>' +
+        '<hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">' +
+        bodyHtml +
+        '<div class="ai-print-footer">For educational purposes only. AI suggestions are not a substitute for professional medical advice. Discuss any changes with your care team.</div>' +
+        '</body></html>'
+    );
+    win.document.close();
+    win.focus();
+    setTimeout(function () { win.print(); win.close(); }, 250);
+}
+
+function printPatientAiRecommendations() {
+    const name = (currentUser && currentUser.name) ? currentUser.name : 'Patient';
+    printAiRecommendations(aiConversationHistory, {
+        title: 'AI Wellbeing Recommendations',
+        subtitle: 'Wellbeing Companion',
+        metaLines: ['Prepared for: ' + name],
+    });
+}
+
+function printDoctorAiRecommendations() {
+    const doctorName = (currentUser && currentUser.name) ? currentUser.name : 'Doctor';
+    const patientUser = (typeof window.doctorLoadedPatientUsername !== 'undefined' && window.doctorLoadedPatientUsername)
+        ? window.doctorLoadedPatientUsername : '';
+    const meta = ['Prepared by: ' + doctorName];
+    if (patientUser) meta.push('Patient context: ' + patientUser);
+    printAiRecommendations(doctorAIConversationHistory, {
+        title: 'AI Clinical Recommendations',
+        subtitle: 'Wellbeing Companion — Doctor Assistant',
+        metaLines: meta,
+    });
 }
 
 // Clear conversation (optional - can add a button for this)
@@ -1205,6 +1336,7 @@ function clearConversation() {
     if (imgName) imgName.textContent = '';
     const imgRemove = document.getElementById('aiImageRemoveBtn');
     if (imgRemove) imgRemove.style.display = 'none';
+    updatePatientAiPrintButtonVisibility();
 }
 
 // ——— Doctor: BMI & BMR Calculator (Mifflin-St Jeor) ———
@@ -1480,6 +1612,7 @@ function updateDoctorAIDisplay() {
     });
     el.innerHTML = blocks.join('');
     finalizeAiReferenceBlocks(el);
+    updateDoctorAiPrintButtonVisibility();
 }
 
 async function sendDoctorAIMessage() {
@@ -1510,7 +1643,8 @@ async function sendDoctorAIMessage() {
             null,
             'doctor',
             patientContext,
-            litUser
+            litUser,
+            currentUser.username
         );
         const text = (res && res.response) ? res.response : (typeof res === 'string' ? res : '');
         doctorAIConversationHistory.push({

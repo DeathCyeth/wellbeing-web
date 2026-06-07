@@ -310,7 +310,7 @@ class ApiService {
 
     // AI Companion with conversation history (medicalInfo = doctor-recorded data; image = optional base64/data URL for current message)
     // role = 'doctor' and patient_context for doctor-side AI
-    async getAIAdvice(question, userName, likes, dislikes, notes, conversationHistory = [], medicalInfo = {}, image = null, role = null, patientContext = '', contextUsername = '') {
+    async getAIAdvice(question, userName, likes, dislikes, notes, conversationHistory = [], medicalInfo = {}, image = null, role = null, patientContext = '', contextUsername = '', actingUsername = '') {
         const body = {
             question,
             user_name: userName || 'User',
@@ -324,6 +324,7 @@ class ApiService {
         if (role) body.role = role;
         if (patientContext) body.patient_context = patientContext;
         if (contextUsername) body.context_username = contextUsername;
+        if (actingUsername) body.username = actingUsername;
         return await this.request('/ai/advice', { method: 'POST', body });
     }
 
@@ -364,6 +365,15 @@ class ApiService {
             method: 'POST',
             body,
         });
+    }
+
+    /** Admin: list saved AI Q&A (same auth as feedback admin). */
+    async listAiChatLogsAdmin({ username, password, filter_source, errors_only, search }) {
+        const body = { username, password };
+        if (filter_source) body.filter_source = filter_source;
+        if (errors_only) body.errors_only = true;
+        if (search) body.search = search;
+        return await this.request('/ai/admin/list', { method: 'POST', body });
     }
 
     /** Create Admin user (requires ADMIN_BOOTSTRAP_KEY on server). */

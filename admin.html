@@ -73,9 +73,48 @@
             </div>
             <div id="adminFbList"></div>
         </div>
+
+        <div class="card" style="margin-top: 20px;">
+            <h2 style="font-size: 1.1rem;">AI chat log (review responses)</h2>
+            <p style="color: var(--text-light); font-size: 0.9rem; margin: 8px 0 16px;">
+                Every patient and doctor AI question is saved here so you can spot errors, bad citations, or API failures.
+                Use the same admin login above, then load the log.
+            </p>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 12px;">
+                <div class="form-group" style="margin: 0; min-width: 120px;">
+                    <label for="adminAiFilterSource">Source</label>
+                    <select id="adminAiFilterSource" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color);">
+                        <option value="">All</option>
+                        <option value="patient">patient</option>
+                        <option value="doctor">doctor</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin: 0;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="adminAiErrorsOnly">
+                        Errors only
+                    </label>
+                </div>
+                <div class="form-group" style="margin: 0; flex: 1; min-width: 180px;">
+                    <label for="adminAiSearch">Search</label>
+                    <input type="search" id="adminAiSearch" placeholder="Question, response, username…" autocomplete="off" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color);">
+                </div>
+                <button type="button" class="btn btn-primary" id="adminAiLoadBtn">Load AI log</button>
+            </div>
+            <div id="adminAiError" class="error-message"></div>
+        </div>
+
+        <div id="adminAiResults" class="card" style="margin-top: 20px; display: none;">
+            <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px;">
+                <h2 style="font-size: 1.1rem; margin: 0;">AI exchanges <span id="adminAiCount" style="color: var(--text-light); font-weight: normal;"></span></h2>
+                <button type="button" class="btn btn-secondary" id="adminAiExportBtn" title="Download loaded rows as CSV">Export CSV</button>
+            </div>
+            <div id="adminAiList"></div>
+        </div>
     </div>
     <script src="api-service.js"></script>
     <script src="admin.js"></script>
+    <script src="admin-ai-log.js"></script>
     <script>
         (function () {
             var m = location.pathname.match(/^\/console\/([^/]+)/);

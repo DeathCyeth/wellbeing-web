@@ -132,7 +132,10 @@
                             </h3>
                             <p class="ai-subtitle" style="margin: 0; color: var(--text-light);">Ask me anything about your wellbeing, recipes, or health questions!</p>
                         </div>
-                        <button type="button" class="btn btn-link" onclick="clearConversation()" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color); position: relative; z-index: 10;">Clear Chat</button>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; position: relative; z-index: 10;">
+                            <button type="button" class="btn btn-link" id="patientAiPrintBtn" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color); display: none;">Print</button>
+                            <button type="button" class="btn btn-link" onclick="clearConversation()" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color);">Clear Chat</button>
+                        </div>
                     </div>
                     <form id="aiForm" style="position: relative; z-index: 2;">
                         <div class="form-group" style="position: relative; z-index: 2;">
@@ -316,7 +319,10 @@
                     <label for="doctorAIQuestion">Question</label>
                     <textarea id="doctorAIQuestion" rows="2" placeholder="e.g. What foods should I recommend for someone with diabetes?"></textarea>
                 </div>
-                <button type="button" class="btn btn-primary" id="doctorAISendBtn">Send</button>
+                <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                    <button type="button" class="btn btn-primary" id="doctorAISendBtn">Send</button>
+                    <button type="button" class="btn btn-secondary" id="doctorAiPrintBtn" style="display: none;">Print recommendations</button>
+                </div>
                 <div id="doctorAIResponse" class="ai-response" style="margin-top: 16px; min-height: 80px; padding: 12px; background: #f8f9fa; border-radius: 8px; white-space: pre-wrap; line-height: 1.6;"></div>
             </div>
 
@@ -502,7 +508,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="api-service.js?v=4.3"></script>
-    <script src="app.js?v=5.3"></script>
+    <script src="app.js?v=5.4"></script>
     <script>
         // Show which site we're on (so tablet users can confirm same URL as desktop)
         (function () {
