@@ -357,6 +357,11 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_ai_chat_log_created ON ai_chat_log(created_at DESC)")
     except (sqlite3.OperationalError, Exception):
         pass
+    for col, ctype in [("rating", "INTEGER"), ("rated_at", "INTEGER")]:
+        try:
+            run_execute(cursor, f"ALTER TABLE ai_chat_log ADD COLUMN {col} {ctype}")
+        except (sqlite3.OperationalError, Exception):
+            pass
     conn.commit()
     conn.close()
 
@@ -450,6 +455,11 @@ def init_db_pg():
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_ai_chat_log_created ON ai_chat_log (created_at DESC)"
     )
+    for col, ctype in [("rating", "INTEGER"), ("rated_at", "BIGINT")]:
+        try:
+            cur.execute(f"ALTER TABLE ai_chat_log ADD COLUMN IF NOT EXISTS {col} {ctype}")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
     print("PostgreSQL tables initialized (shared DB for all devices)")
@@ -887,34 +897,87 @@ def _insert_ai_chat_log(
                 refs_json = None
         conn = get_conn()
         cursor = conn.cursor()
+        params = (
+            ts_ms,
+            username or "",
+            display_name or "",
+            role or "",
+            context_username or "",
+            source or "",
+            question or "",
+            response or "",
+            refs_json,
+            model or "",
+            1 if success else 0,
+            (error_message or "")[:4000],
+            1 if had_image else 0,
+        )
+        if USE_PG:
+            cursor.execute(
+                """
+                INSERT INTO ai_chat_log (
+                    created_at, username, display_name, role, context_username, source,
+                    question, response, references_json, model, success, error_message, had_image
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                """,
+                params,
+            )
+            row = cursor.fetchone()
+            log_id = row[0] if row else None
+        else:
+            run_execute(
+                cursor,
+                """
+                INSERT INTO ai_chat_log (
+                    created_at, username, display_name, role, context_username, source,
+                    question, response, references_json, model, success, error_message, had_image
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                params,
+            )
+            log_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return log_id
+    except Exception as ex:
+        print(f"ai_chat_log insert failed: {ex}")
+        return None
+
+
+def _ai_rating_feedback_system_block(username):
+    """Recent thumbs-down ratings so the model can adjust on the next reply."""
+    uname = _norm(username or "").lower()
+    if not uname:
+        return None
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
         run_execute(
             cursor,
             """
-            INSERT INTO ai_chat_log (
-                created_at, username, display_name, role, context_username, source,
-                question, response, references_json, model, success, error_message, had_image
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            SELECT question, response FROM ai_chat_log
+            WHERE LOWER(username)=? AND rating=-1 AND success=1
+            ORDER BY rated_at DESC LIMIT 2
             """,
-            (
-                ts_ms,
-                username or "",
-                display_name or "",
-                role or "",
-                context_username or "",
-                source or "",
-                question or "",
-                response or "",
-                refs_json,
-                model or "",
-                1 if success else 0,
-                (error_message or "")[:4000],
-                1 if had_image else 0,
-            ),
+            (uname,),
         )
-        conn.commit()
+        rows = cursor.fetchall()
         conn.close()
+        if not rows:
+            return None
+        lines = [
+            "User feedback: this user recently rated the following AI answers as unhelpful (thumbs down). "
+            "Avoid repeating similar mistakes—be clearer, more accurate, and better aligned with their question."
+        ]
+        for i, (q, r) in enumerate(rows, 1):
+            q_short = (q or "")[:200]
+            r_short = (r or "")[:300]
+            lines.append(f"{i}. Question: {q_short}")
+            lines.append(f"   Unhelpful answer excerpt: {r_short}")
+        return "\n".join(lines)
     except Exception as ex:
-        print(f"ai_chat_log insert failed: {ex}")
+        print(f"ai rating feedback lookup failed: {ex}")
+        return None
 
 
 def _strip_wrapping_quotes_value(val):
@@ -1369,7 +1432,8 @@ def ai_chat_admin_list():
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = (
         "SELECT id, created_at, username, display_name, role, context_username, source, "
-        "question, response, references_json, model, success, error_message, had_image "
+        "question, response, references_json, model, success, error_message, had_image, "
+        "rating, rated_at "
         "FROM ai_chat_log"
         + where_sql
         + " ORDER BY created_at DESC LIMIT 500"
@@ -1405,9 +1469,58 @@ def ai_chat_admin_list():
                 "success": bool(r[11]),
                 "error_message": r[12] or "",
                 "had_image": bool(r[13]),
+                "rating": r[14] if len(r) > 14 else None,
+                "rated_at": r[15] if len(r) > 15 else None,
             }
         )
     return jsonify({"items": items, "count": len(items)})
+
+
+@app.route("/api/ai/rate", methods=["POST"])
+def rate_ai_response():
+    """Thumbs up (1) or down (-1) on a logged AI reply; 0 clears the rating."""
+    data = request.get_json() or {}
+    log_id = data.get("log_id")
+    username = _norm(data.get("username") or "").lower()
+    try:
+        rating = int(data.get("rating"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "rating must be 1, -1, or 0"}), 400
+    if rating not in (1, -1, 0):
+        return jsonify({"error": "rating must be 1, -1, or 0"}), 400
+    if not log_id or not username:
+        return jsonify({"error": "log_id and username are required"}), 400
+    try:
+        log_id = int(log_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid log_id"}), 400
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        "SELECT username FROM ai_chat_log WHERE id=?",
+        (log_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "AI response not found"}), 404
+    owner = _norm(row[0] or "").lower()
+    if owner != username:
+        conn.close()
+        return jsonify({"error": "Not allowed to rate this response"}), 403
+
+    rated_at = int(datetime.now().timestamp() * 1000) if rating != 0 else None
+    db_rating = rating if rating != 0 else None
+    run_execute(
+        cursor,
+        "UPDATE ai_chat_log SET rating=?, rated_at=? WHERE id=?",
+        (db_rating, rated_at, log_id),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "log_id": log_id, "rating": db_rating})
 
 
 @app.route("/api/admin/bootstrap", methods=["POST"])
@@ -2591,6 +2704,10 @@ def get_ai_advice():
         else:
             messages.append({"role": "system", "content": AI_CITATION_RULE_PATIENT})
 
+        rating_feedback = _ai_rating_feedback_system_block(acting_username)
+        if rating_feedback:
+            messages.append({"role": "system", "content": rating_feedback})
+
         # Full context system prompt (first message in thread only)
         if len(conversation_history) == 0:
             if role == 'doctor':
@@ -2734,7 +2851,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
             except Exception as e:
                 print(f'pubmed_references_for_pmids error: {e}')
 
-        _insert_ai_chat_log(
+        log_id = _insert_ai_chat_log(
             username=acting_username,
             display_name=_norm(user_name or ''),
             role=role_norm or chat_source,
@@ -2748,7 +2865,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
             had_image=has_image_flag,
         )
 
-        return jsonify({"response": response_text, "references": references})
+        return jsonify({"response": response_text, "references": references, "log_id": log_id})
 
     except Exception as e:
         err_msg = str(e)

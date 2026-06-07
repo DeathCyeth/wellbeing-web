@@ -476,6 +476,53 @@ body {
     margin-bottom: 6px;
 }
 
+.ai-rating-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.ai-rating-label {
+    font-size: 0.8rem;
+    color: var(--text-light);
+    margin-right: 4px;
+}
+
+.ai-rate-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    height: 32px;
+    padding: 4px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--card-bg, #fff);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.ai-rate-btn:hover {
+    background: rgba(99, 102, 241, 0.08);
+    border-color: var(--primary-color);
+}
+
+.ai-rate-btn.is-active {
+    background: rgba(99, 102, 241, 0.14);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 1px var(--primary-color);
+}
+
+.ai-rate-btn:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
 /* Fail-safe: cap visible sources at 2 until the details panel is opened */
 .ai-references-block > ul:first-of-type > li:nth-child(n+3) {
     display: none;

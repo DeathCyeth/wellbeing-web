@@ -367,6 +367,14 @@ class ApiService {
         });
     }
 
+    /** Thumbs up (1), down (-1), or clear (0) on a logged AI reply. */
+    async rateAiResponse({ log_id, rating, username }) {
+        return await this.request('/ai/rate', {
+            method: 'POST',
+            body: { log_id, rating, username },
+        });
+    }
+
     /** Admin: list saved AI Q&A (same auth as feedback admin). */
     async listAiChatLogsAdmin({ username, password, filter_source, errors_only, search }) {
         const body = { username, password };

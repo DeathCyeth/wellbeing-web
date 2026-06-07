@@ -59,6 +59,9 @@
                 const status = failed
                     ? '<span style="color:#b91c1c;font-weight:600;">Failed</span>'
                     : '<span style="color:#15803d;font-weight:600;">OK</span>';
+                let ratingBadge = '';
+                if (row.rating === 1) ratingBadge = ' · <span title="Thumbs up">👍</span>';
+                else if (row.rating === -1) ratingBadge = ' · <span title="Thumbs down">👎</span>';
                 const ctx = row.context_username && row.context_username !== row.username
                     ? ' · patient context: <strong>' + escapeHtml(row.context_username) + '</strong>'
                     : '';
@@ -68,7 +71,7 @@
                 return (
                     '<article class="admin-ai-log-card" style="border: 1px solid; border-radius: 8px; padding: 14px; margin-bottom: 14px; ' + border + '">' +
                     '<div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; font-size:0.85rem; color:var(--text-light); margin-bottom:10px;">' +
-                    '<span>' + status + ' · <strong>' + escapeHtml(row.username) + '</strong> · ' +
+                    '<span>' + status + ratingBadge + ' · <strong>' + escapeHtml(row.username) + '</strong> · ' +
                     escapeHtml(row.source || '') + ctx + refs + model + img + '</span>' +
                     '<span>#' + escapeHtml(String(row.id)) + ' · ' + escapeHtml(formatWhen(row.created_at)) + '</span></div>' +
                     '<div style="margin-bottom:10px;"><strong style="font-size:0.8rem; color:var(--primary-color);">Question</strong>' +
@@ -119,7 +122,7 @@
         exportBtn.addEventListener('click', function () {
             if (!lastItems.length) return;
             const header = [
-                'id', 'created_at', 'username', 'source', 'success', 'error_message',
+                'id', 'created_at', 'username', 'source', 'success', 'rating', 'error_message',
                 'model', 'references_count', 'question', 'response',
             ];
             const lines = [header.join(',')].concat(
@@ -130,6 +133,7 @@
                         csvEscape(row.username),
                         csvEscape(row.source),
                         csvEscape(row.success ? 1 : 0),
+                        csvEscape(row.rating),
                         csvEscape(row.error_message),
                         csvEscape(row.model),
                         csvEscape(row.references_count),

@@ -1,5 +1,5 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '5.4';
+window.WELLBEING_APP_JS_VERSION = '5.5';
 
 // Current user state
 let currentUser = null;
@@ -230,6 +230,13 @@ function setupEventListeners() {
     if (doctorAiPrintBtn) {
         doctorAiPrintBtn.addEventListener('click', () => printDoctorAiRecommendations());
     }
+    document.addEventListener('click', function (e) {
+        const rateBtn = e.target.closest('.ai-rate-btn');
+        if (rateBtn) {
+            e.preventDefault();
+            handleAiRateClick(rateBtn);
+        }
+    });
     // Doctor: BMI/BMR Calculate button
     const doctorBMICalculateBtn = document.getElementById('doctorBMICalculateBtn');
     if (doctorBMICalculateBtn) {
@@ -1104,7 +1111,9 @@ window.getAIAdvice = async function getAIAdvice() {
         aiConversationHistory.push({
             role: 'assistant',
             content: responseText,
-            references: (aiResponse && Array.isArray(aiResponse.references)) ? aiResponse.references : []
+            references: (aiResponse && Array.isArray(aiResponse.references)) ? aiResponse.references : [],
+            log_id: (aiResponse && aiResponse.log_id) ? aiResponse.log_id : null,
+            rating: null
         });
         
         // Update display
@@ -1188,6 +1197,7 @@ function updateConversationDisplay() {
             html += `
                 <div class="ai-message ai-assistant-message">
                     <strong>AI:</strong> ${formatAssistantReplyHtml(msg.content, msg.references)}
+                    ${formatAiRatingButtonsHtml(msg.log_id, msg.rating, index, 'patient')}
                 </div>
             `;
         }
@@ -1208,6 +1218,49 @@ function hasAiPrintableContent(history) {
     return Array.isArray(history) && history.some(function (m) {
         return m.role === 'assistant' && String(m.content || '').trim();
     });
+}
+
+function formatAiRatingButtonsHtml(logId, currentRating, msgIndex, historyKind) {
+    if (!logId) return '';
+    const upActive = currentRating === 1 ? ' is-active' : '';
+    const downActive = currentRating === -1 ? ' is-active' : '';
+    return (
+        '<div class="ai-rating-row">' +
+        '<span class="ai-rating-label">Was this helpful?</span>' +
+        '<button type="button" class="ai-rate-btn ai-rate-up' + upActive + '" data-log-id="' + escapeHtml(String(logId)) + '" data-rating="1" data-msg-index="' + msgIndex + '" data-history="' + escapeHtml(historyKind) + '" aria-label="Thumbs up" title="Good response">👍</button>' +
+        '<button type="button" class="ai-rate-btn ai-rate-down' + downActive + '" data-log-id="' + escapeHtml(String(logId)) + '" data-rating="-1" data-msg-index="' + msgIndex + '" data-history="' + escapeHtml(historyKind) + '" aria-label="Thumbs down" title="Poor response">👎</button>' +
+        '</div>'
+    );
+}
+
+async function handleAiRateClick(btn) {
+    if (!btn || !currentUser) return;
+    const logId = parseInt(btn.getAttribute('data-log-id'), 10);
+    const rating = parseInt(btn.getAttribute('data-rating'), 10);
+    const msgIndex = parseInt(btn.getAttribute('data-msg-index'), 10);
+    const historyKind = btn.getAttribute('data-history');
+    const hist = historyKind === 'doctor' ? doctorAIConversationHistory : aiConversationHistory;
+    const msg = hist[msgIndex];
+    if (!msg || !logId) return;
+    const newRating = (msg.rating === rating) ? 0 : rating;
+    btn.disabled = true;
+    try {
+        await apiService.rateAiResponse({
+            log_id: logId,
+            rating: newRating,
+            username: currentUser.username,
+        });
+        msg.rating = newRating || null;
+        if (historyKind === 'doctor') updateDoctorAIDisplay();
+        else updateConversationDisplay();
+        if (newRating === 1) showToast('Thanks — glad that helped', 'success');
+        else if (newRating === -1) showToast('Thanks — we\'ll use this to improve future answers', 'success');
+        else showToast('Rating cleared', 'success');
+    } catch (e) {
+        showToast(e.message || 'Could not save rating', 'error');
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 function updatePatientAiPrintButtonVisibility() {
@@ -1604,11 +1657,11 @@ function updateDoctorAIDisplay() {
         el.innerHTML = '';
         return;
     }
-    const blocks = doctorAIConversationHistory.map(function (msg) {
+    const blocks = doctorAIConversationHistory.map(function (msg, index) {
         if (msg.role === 'user') {
             return '<div class="doctor-ai-line doctor-ai-user-line"><strong>You:</strong> ' + escapeHtml(msg.content || '').replace(/\n/g, '<br>') + '</div>';
         }
-        return '<div class="doctor-ai-line doctor-ai-assistant-line"><strong>AI:</strong> ' + formatAssistantReplyHtml(msg.content || '', msg.references) + '</div>';
+        return '<div class="doctor-ai-line doctor-ai-assistant-line"><strong>AI:</strong> ' + formatAssistantReplyHtml(msg.content || '', msg.references) + formatAiRatingButtonsHtml(msg.log_id, msg.rating, index, 'doctor') + '</div>';
     });
     el.innerHTML = blocks.join('');
     finalizeAiReferenceBlocks(el);
@@ -1650,7 +1703,9 @@ async function sendDoctorAIMessage() {
         doctorAIConversationHistory.push({
             role: 'assistant',
             content: text,
-            references: (res && Array.isArray(res.references)) ? res.references : []
+            references: (res && Array.isArray(res.references)) ? res.references : [],
+            log_id: (res && res.log_id) ? res.log_id : null,
+            rating: null
         });
         updateDoctorAIDisplay();
         if (responseEl) responseEl.scrollTop = responseEl.scrollHeight;
