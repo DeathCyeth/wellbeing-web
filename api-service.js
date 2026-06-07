@@ -208,7 +208,7 @@ class ApiService {
         try {
             return await this.request(`/users/${username}/preferences`);
         } catch (error) {
-            return { likes: '', dislikes: '' };
+            return { likes: '', dislikes: '', religion: '', culture: '' };
         }
     }
 
@@ -216,14 +216,14 @@ class ApiService {
         try {
             return await this.request(`/users/by-patient-id/${patientId}/preferences`);
         } catch (error) {
-            return { likes: '', dislikes: '' };
+            return { likes: '', dislikes: '', religion: '', culture: '' };
         }
     }
 
-    async upsertLikesDislikes(username, likes, dislikes) {
+    async upsertLikesDislikes(username, likes, dislikes, religion = '', culture = '') {
         return await this.request(`/users/${username}/preferences`, {
             method: 'POST',
-            body: { likes, dislikes },
+            body: { likes, dislikes, religion, culture },
         });
     }
 
@@ -310,12 +310,14 @@ class ApiService {
 
     // AI Companion with conversation history (medicalInfo = doctor-recorded data; image = optional base64/data URL for current message)
     // role = 'doctor' and patient_context for doctor-side AI
-    async getAIAdvice(question, userName, likes, dislikes, notes, conversationHistory = [], medicalInfo = {}, image = null, role = null, patientContext = '', contextUsername = '', actingUsername = '') {
+    async getAIAdvice(question, userName, likes, dislikes, notes, conversationHistory = [], medicalInfo = {}, image = null, role = null, patientContext = '', contextUsername = '', actingUsername = '', religion = '', culture = '', onboardingInterview = false) {
         const body = {
             question,
             user_name: userName || 'User',
             likes: likes || '',
             dislikes: dislikes || '',
+            religion: religion || '',
+            culture: culture || '',
             notes: notes || [],
             medical_info: medicalInfo || {},
             conversation_history: conversationHistory
@@ -325,7 +327,15 @@ class ApiService {
         if (patientContext) body.patient_context = patientContext;
         if (contextUsername) body.context_username = contextUsername;
         if (actingUsername) body.username = actingUsername;
+        if (onboardingInterview) body.onboarding_interview = true;
         return await this.request('/ai/advice', { method: 'POST', body });
+    }
+
+    async finishPatientOnboarding(username, conversationHistory) {
+        return await this.request(`/users/${username}/onboarding/finish`, {
+            method: 'POST',
+            body: { conversation_history: conversationHistory || [] },
+        });
     }
 
     /** Curated PubMed PMIDs: global + optional patient_username for patient-scoped rows */

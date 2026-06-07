@@ -240,6 +240,10 @@ def init_db():
         run_execute(cursor, "ALTER TABLE users ADD COLUMN age INTEGER")
     except (sqlite3.OperationalError, Exception):
         pass
+    try:
+        run_execute(cursor, "ALTER TABLE users ADD COLUMN onboarding_completed INTEGER DEFAULT 1")
+    except (sqlite3.OperationalError, Exception):
+        pass
     
     run_execute(cursor, "SELECT username, patient_id FROM users WHERE role='Patient'")
     all_patients = cursor.fetchall()
@@ -254,9 +258,16 @@ def init_db():
             username TEXT PRIMARY KEY,
             likes TEXT,
             dislikes TEXT,
+            religion TEXT,
+            culture TEXT,
             FOREIGN KEY(username) REFERENCES users(username)
         )
     """)
+    for col in ("religion", "culture"):
+        try:
+            run_execute(cursor, f"ALTER TABLE preferences ADD COLUMN {col} TEXT")
+        except (sqlite3.OperationalError, Exception):
+            pass
     run_execute(cursor, """
         CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -380,15 +391,25 @@ def init_db_pg():
             age INTEGER,
             sex VARCHAR(64),
             date_of_birth TEXT, middle_initial TEXT, last_name TEXT,
-            biological_sex TEXT, gender_identity TEXT
+            biological_sex TEXT, gender_identity TEXT,
+            onboarding_completed INTEGER DEFAULT 0
         )
     """)
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed INTEGER DEFAULT 1")
+    except Exception:
+        pass
     cur.execute("""
         CREATE TABLE IF NOT EXISTS preferences (
             username VARCHAR(255) PRIMARY KEY REFERENCES users(username),
-            likes TEXT, dislikes TEXT
+            likes TEXT, dislikes TEXT, religion TEXT, culture TEXT
         )
     """)
+    for col in ("religion", "culture"):
+        try:
+            cur.execute(f"ALTER TABLE preferences ADD COLUMN IF NOT EXISTS {col} TEXT")
+        except Exception:
+            pass
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notes (
             id SERIAL PRIMARY KEY,
@@ -857,6 +878,32 @@ def _notify_feedback_email(username, role, message, source, ts_ms, feedback_id):
             print(f"FEEDBACK email notify failed: {ex}")
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def _user_onboarding_completed(username):
+    """True if patient finished welcome interview (or not a new patient flow)."""
+    uname = _norm(username or "").lower()
+    if not uname:
+        return True
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
+        run_execute(
+            cursor,
+            "SELECT onboarding_completed, role FROM users WHERE LOWER(username)=?",
+            (uname,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return True
+        completed, role = row[0], row[1]
+        if _norm(role or "").lower() != "patient":
+            return True
+        return bool(completed)
+    except Exception as ex:
+        print(f"onboarding status lookup failed: {ex}")
+        return True
 
 
 def _can_view_feedback_admin(user):
@@ -1606,6 +1653,7 @@ def login():
         
         conn.close()
         fb_tok = _make_feedback_token(user[0])
+        onboarding_completed = _user_onboarding_completed(user[0])
         return jsonify(
             {
                 "username": user[0],
@@ -1615,6 +1663,7 @@ def login():
                 "age": user[5] if user[5] else None,
                 "sex": user[6] if len(user) > 6 and user[6] else "",
                 "feedback_token": fb_tok,
+                "onboarding_completed": onboarding_completed,
             }
         )
     else:
@@ -1659,9 +1708,10 @@ def create_user():
                 break
     
     try:
+        onboarding_done = 0 if role.lower() == 'patient' else 1
         run_execute(cursor,
-            "INSERT INTO users (username, password, name, role, patient_id) VALUES (?, ?, ?, ?, ?)",
-            (username, password, name, role, patient_id)
+            "INSERT INTO users (username, password, name, role, patient_id, onboarding_completed) VALUES (?, ?, ?, ?, ?, ?)",
+            (username, password, name, role, patient_id, onboarding_done)
         )
         conn.commit()
         conn.close()
@@ -1770,7 +1820,8 @@ def get_user(username):
             "last_name": user[8] if len(user) > 8 else None,
             "biological_sex": user[9] if len(user) > 9 else (user[5] if len(user) > 5 else None),
             "gender_identity": user[10] if len(user) > 10 else None,
-            "medical_info": medical_info
+            "medical_info": medical_info,
+            "onboarding_completed": _user_onboarding_completed(user[0]),
         }
         print(f"Returning user data for {user[0]}")
         return jsonify(response_data)
@@ -1969,7 +2020,7 @@ def get_preferences(username):
     conn = get_conn()
     cursor = conn.cursor()
     run_execute(cursor,
-        "SELECT likes, dislikes FROM preferences WHERE username=?",
+        "SELECT likes, dislikes, religion, culture FROM preferences WHERE username=?",
         (username.lower(),)
     )
     prefs = cursor.fetchone()
@@ -1978,10 +2029,12 @@ def get_preferences(username):
     if prefs:
         return jsonify({
             "likes": prefs[0] or "",
-            "dislikes": prefs[1] or ""
+            "dislikes": prefs[1] or "",
+            "religion": (prefs[2] or "") if len(prefs) > 2 else "",
+            "culture": (prefs[3] or "") if len(prefs) > 3 else "",
         })
     else:
-        return jsonify({"likes": "", "dislikes": ""})
+        return jsonify({"likes": "", "dislikes": "", "religion": "", "culture": ""})
 
 
 @app.route('/api/users/by-patient-id/<patient_id>/preferences', methods=['GET'])
@@ -1993,17 +2046,22 @@ def get_preferences_by_patient_id(patient_id):
     run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (pid,))
     row = cursor.fetchone()
     username = row[0] if row else None
-    out = {"likes": "", "dislikes": ""}
+    out = {"likes": "", "dislikes": "", "religion": "", "culture": ""}
     for uname in ([username] if username else []) + ([pid] if pid else []):
         if not uname:
             continue
-        run_execute(cursor,"SELECT likes, dislikes FROM preferences WHERE username=?", (uname.lower(),))
+        run_execute(cursor,"SELECT likes, dislikes, religion, culture FROM preferences WHERE username=?", (uname.lower(),))
         prefs = cursor.fetchone()
         if not prefs:
-            run_execute(cursor,"SELECT likes, dislikes FROM preferences WHERE username=?", (uname,))
+            run_execute(cursor,"SELECT likes, dislikes, religion, culture FROM preferences WHERE username=?", (uname,))
             prefs = cursor.fetchone()
-        if prefs and (prefs[0] or prefs[1]):
-            out = {"likes": prefs[0] or "", "dislikes": prefs[1] or ""}
+        if prefs and (prefs[0] or prefs[1] or (len(prefs) > 2 and prefs[2]) or (len(prefs) > 3 and prefs[3])):
+            out = {
+                "likes": prefs[0] or "",
+                "dislikes": prefs[1] or "",
+                "religion": (prefs[2] or "") if len(prefs) > 2 else "",
+                "culture": (prefs[3] or "") if len(prefs) > 3 else "",
+            }
             break
     conn.close()
     return jsonify(out)
@@ -2011,17 +2069,21 @@ def get_preferences_by_patient_id(patient_id):
 @app.route('/api/users/<username>/preferences', methods=['POST'])
 def update_preferences(username):
     """Update user preferences"""
-    data = request.get_json()
+    data = request.get_json() or {}
     likes = data.get('likes', '')
     dislikes = data.get('dislikes', '')
+    religion = (data.get('religion') or '')[:1000]
+    culture = (data.get('culture') or '')[:1000]
     
     conn = get_conn()
     cursor = conn.cursor()
     run_execute(cursor,
-        """INSERT INTO preferences (username, likes, dislikes) 
-           VALUES (?, ?, ?) 
-           ON CONFLICT(username) DO UPDATE SET likes=excluded.likes, dislikes=excluded.dislikes""",
-        (username.lower(), likes, dislikes)
+        """INSERT INTO preferences (username, likes, dislikes, religion, culture) 
+           VALUES (?, ?, ?, ?, ?) 
+           ON CONFLICT(username) DO UPDATE SET
+             likes=excluded.likes, dislikes=excluded.dislikes,
+             religion=excluded.religion, culture=excluded.culture""",
+        (username.lower(), likes, dislikes, religion, culture)
     )
     conn.commit()
     conn.close()
@@ -2353,6 +2415,21 @@ Then at least 2 bullet points. If a system message in this request contains "Web
 
 Evidence discipline: When system messages include PubMed/openFDA excerpts, web search results, or the literature repository block, use only those passages to support clinical, nutrition, or medication statements. If a passage is off-topic for the question, do not cite or restate it as if it applied. Do not invent PMIDs, DOIs, or URLs. For calories, BMR, or TDEE numbers, either derive them step-by-step from explicit patient metrics in this thread or label them clearly as general educational estimates—not personalized medical facts."""
 
+ONBOARDING_START_TOKEN = "__ONBOARDING_START__"
+
+AI_PATIENT_ONBOARDING_PROMPT = """You are conducting a warm welcome interview for {user_name}, a new patient using Wellbeing Companion.
+Your job is to get to know them through a short, friendly conversation—not a medical exam.
+
+Interview rules:
+- Ask ONE question at a time. Keep each reply to 2–4 short sentences.
+- Briefly acknowledge their last answer before asking the next question.
+- Over the conversation, learn about: their main wellbeing or nutrition goals; foods they enjoy; foods they avoid or dislike; food allergies; religious or cultural food practices that matter to them (e.g. halal, kosher, fasting, vegetarian traditions, cultural cuisines); their cultural background if they want to share; how active they are; anything important for their doctor or care team to know; age and sex if they are comfortable sharing.
+- Do not lecture, diagnose, or give long advice yet—focus on listening and asking.
+- When you have covered goals, likes/dislikes, religion/culture (if they wish to share), activity, and allergies (or they say they have none), give a short friendly summary of what you learned and tell them they can tap **Save intro to my profile** when ready, or keep chatting if they want to add more.
+- Never invent facts they did not share.
+
+Citation rule during this interview only: after your reply, add **Supporting references** with exactly ONE brief bullet (e.g. general NHS or WHO wellbeing guidance)—no URLs required."""
+
 AI_CITATION_RULE_PATIENT = """Citation rule (applies to EVERY reply, no exceptions—including short answers and follow-ups):
 After your main answer, always add a section with this exact heading on its own line:
 **Supporting references**
@@ -2623,6 +2700,150 @@ def _nutrition_clamp_plan(plan, maintenance_target, sex_raw, age):
     return plan, notes
 
 
+def _format_onboarding_transcript(conversation_history):
+    lines = []
+    for msg in conversation_history or []:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if not content or content == ONBOARDING_START_TOKEN:
+            continue
+        if role == "user":
+            lines.append(f"Patient: {content}")
+        elif role == "assistant":
+            lines.append(f"AI: {content}")
+    return "\n".join(lines)
+
+
+def _save_onboarding_profile(username, extracted):
+    """Write extracted interview fields to preferences, medical_info, and users."""
+    uname = _norm(username or "").lower()
+    if not uname or not isinstance(extracted, dict):
+        return
+    likes = (extracted.get("likes") or "").strip()[:4000]
+    dislikes = (extracted.get("dislikes") or "").strip()[:4000]
+    religion = (extracted.get("religion") or "").strip()[:1000]
+    culture = (extracted.get("culture") or "").strip()[:1000]
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        """INSERT INTO preferences (username, likes, dislikes, religion, culture) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(username) DO UPDATE SET
+             likes=excluded.likes, dislikes=excluded.dislikes,
+             religion=excluded.religion, culture=excluded.culture""",
+        (uname, likes, dislikes, religion, culture),
+    )
+    med_fields = {
+        "patient_goals": (extracted.get("patient_goals") or "")[:4000],
+        "food_allergies": (extracted.get("food_allergies") or "")[:2000],
+        "physical_activity": (extracted.get("physical_activity") or "")[:2000],
+        "activity_level": (extracted.get("activity_level") or "")[:200],
+        "past_medical_history": (extracted.get("past_medical_history") or "")[:4000],
+    }
+    run_execute(
+        cursor,
+        """INSERT INTO patient_medical_info (username, patient_goals, food_allergies, physical_activity, activity_level, past_medical_history)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(username) DO UPDATE SET
+             patient_goals=excluded.patient_goals,
+             food_allergies=excluded.food_allergies,
+             physical_activity=excluded.physical_activity,
+             activity_level=excluded.activity_level,
+             past_medical_history=excluded.past_medical_history""",
+        (
+            uname,
+            med_fields["patient_goals"],
+            med_fields["food_allergies"],
+            med_fields["physical_activity"],
+            med_fields["activity_level"],
+            med_fields["past_medical_history"],
+        ),
+    )
+    age_val = extracted.get("age")
+    sex_val = (extracted.get("sex") or "").strip()[:64]
+    try:
+        age_int = int(age_val) if age_val is not None and str(age_val).strip() != "" else None
+    except (TypeError, ValueError):
+        age_int = None
+    if age_int is not None or sex_val:
+        if age_int is not None and sex_val:
+            run_execute(cursor, "UPDATE users SET age=?, sex=? WHERE LOWER(username)=?", (age_int, sex_val, uname))
+        elif age_int is not None:
+            run_execute(cursor, "UPDATE users SET age=? WHERE LOWER(username)=?", (age_int, uname))
+        elif sex_val:
+            run_execute(cursor, "UPDATE users SET sex=? WHERE LOWER(username)=?", (sex_val, uname))
+    run_execute(cursor, "UPDATE users SET onboarding_completed=1 WHERE LOWER(username)=?", (uname,))
+    conn.commit()
+    conn.close()
+
+
+@app.route('/api/users/<username>/onboarding/finish', methods=['POST'])
+def finish_patient_onboarding(username):
+    """Extract profile from interview transcript and mark onboarding complete."""
+    uname = _norm(username or "").lower()
+    if not uname:
+        return jsonify({"error": "Username required"}), 400
+    if not OPENAI_AVAILABLE:
+        return jsonify({"error": "OpenAI not configured."}), 503
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return jsonify({"error": "OpenAI API key not configured."}), 503
+
+    data = request.get_json() or {}
+    history = data.get("conversation_history") or []
+    transcript = _format_onboarding_transcript(history)
+    if len(transcript) < 40:
+        return jsonify({"error": "Please chat with the AI a bit more before saving."}), 400
+
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(cursor, "SELECT role FROM users WHERE LOWER(username)=?", (uname,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or _norm(row[0] or "").lower() != "patient":
+        return jsonify({"error": "Patient not found"}), 404
+
+    try:
+        client = OpenAI(api_key=api_key)
+        completion = client.chat.completions.create(
+            model=_openai_advice_model_id(False),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract structured profile data from a patient welcome interview. "
+                        "Reply with JSON only, no markdown, using this shape:\n"
+                        '{"likes":"","dislikes":"","religion":"","culture":"",'
+                        '"patient_goals":"","food_allergies":"",'
+                        '"physical_activity":"","activity_level":"","past_medical_history":"",'
+                        '"age":null,"sex":""}\n'
+                        "religion: faith or dietary practices they follow (e.g. Muslim, halal; Jewish, kosher; Hindu vegetarian). "
+                        "culture: ethnic/cultural background or cuisines important to them. "
+                        "Use empty strings for unknown text fields and null for age if not stated."
+                    ),
+                },
+                {"role": "user", "content": transcript[:12000]},
+            ],
+            max_tokens=600,
+            temperature=0.2,
+        )
+        raw = (completion.choices[0].message.content or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+        extracted = json.loads(raw)
+        if not isinstance(extracted, dict):
+            raise ValueError("Expected JSON object")
+        _save_onboarding_profile(uname, extracted)
+        return jsonify({"message": "Your intro was saved to your profile.", "onboarding_completed": True})
+    except json.JSONDecodeError as e:
+        print(f"onboarding extract JSON error: {e}")
+        return jsonify({"error": "Could not parse interview. Try a few more answers, then save again."}), 500
+    except Exception as e:
+        print(f"onboarding finish error: {e}")
+        return jsonify({"error": f"Could not save intro: {str(e)}"}), 500
+
+
 @app.route('/api/ai/advice', methods=['POST'])
 def get_ai_advice():
     """Get AI advice using OpenAI with conversation memory"""
@@ -2634,6 +2855,8 @@ def get_ai_advice():
     user_name = data.get('user_name', 'User')
     likes = data.get('likes', '')
     dislikes = data.get('dislikes', '')
+    religion = (data.get('religion') or '').strip()
+    culture = (data.get('culture') or '').strip()
     notes = data.get('notes', [])
     medical_info = data.get('medical_info', {}) or {}
     conversation_history = data.get('conversation_history', [])
@@ -2645,10 +2868,20 @@ def get_ai_advice():
     acting_username = _norm(data.get('username') or context_username or 'unknown').lower()
     role_norm = _norm(role or '').lower()
     chat_source = 'doctor' if role_norm == 'doctor' else 'patient'
+    onboarding_interview = bool(data.get('onboarding_interview'))
+    if role_norm == 'doctor':
+        onboarding_interview = False
+    elif onboarding_interview and _user_onboarding_completed(acting_username):
+        onboarding_interview = False
+
     has_image_flag = bool(image and str(image).startswith('data:image'))
     log_question = question
     if has_image_flag:
         log_question = ((question or '') + ' [image attached]').strip() or '[image attached]'
+
+    if question == ONBOARDING_START_TOKEN:
+        question = "Hello! I'm new here and would like a quick welcome chat to get started."
+        log_question = "[Welcome interview started]"
 
     if not question and not image:
         return jsonify({"error": "Question or image is required"}), 400
@@ -2708,8 +2941,13 @@ def get_ai_advice():
         if rating_feedback:
             messages.append({"role": "system", "content": rating_feedback})
 
-        # Full context system prompt (first message in thread only)
-        if len(conversation_history) == 0:
+        # Welcome interview (new patients) or normal first-message context
+        if onboarding_interview:
+            messages.append({
+                "role": "system",
+                "content": AI_PATIENT_ONBOARDING_PROMPT.format(user_name=user_name),
+            })
+        elif len(conversation_history) == 0:
             if role == 'doctor':
                 system_prompt = """You are an AI assistant helping a doctor in their wellbeing practice. Be professional, concise, and accurate. You can answer questions about nutrition, patient care, general health, and wellbeing. If the doctor provides context about a loaded patient, use it to give relevant advice. Do not make up patient data. You must always follow the citation rule from the previous system message."""
                 if patient_context:
@@ -2722,8 +2960,11 @@ You provide personalized advice about health, recipes, and wellbeing.
 User Preferences:
 - Likes: {likes if likes else 'Not specified'}
 - Dislikes: {dislikes if dislikes else 'Not specified'}
+- Religion / faith practices: {religion if religion else 'Not specified'}
+- Cultural background: {culture if culture else 'Not specified'}
 
 Important: When suggesting recipes, meals, or any food recommendations, you MUST respect the user's dislikes. Never recommend or suggest any food, ingredient, or meal that appears in their dislikes list. Use their likes when possible to suggest foods they enjoy.
+Respect religious and cultural practices they have shared (e.g. halal, kosher, fasting periods, vegetarian norms, traditional cuisines). Do not suggest foods or activities that conflict with their stated religion or culture. When not specified, keep suggestions inclusive.
 
 Doctor-recorded information (use this to personalize advice and avoid conflicting with care plans):
 {medical_context}
@@ -2735,7 +2976,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
                 messages.append({"role": "system", "content": system_prompt})
 
         # Curated literature repository (practice-wide + per-patient PMIDs)
-        skip_search = image and str(image).startswith('data:image')
+        skip_search = bool(image and str(image).startswith('data:image')) or onboarding_interview
         repo_pmids = literature_ordered_pmids(context_username)
         query_pmids = []
         if build_repository_pubmed_block and repo_pmids and not skip_search:
@@ -2919,11 +3160,13 @@ def generate_nutrition_plan():
         user_age = user_row[1] if user_row and len(user_row) > 1 else None
         user_sex = user_row[2] if user_row and len(user_row) > 2 else ""
         run_execute(cursor,
-            "SELECT likes, dislikes FROM preferences WHERE username=?", (uname_lower,)
+            "SELECT likes, dislikes, religion, culture FROM preferences WHERE username=?", (uname_lower,)
         )
         prefs_row = cursor.fetchone()
         likes = (prefs_row[0] or "") if prefs_row else ""
         dislikes = (prefs_row[1] or "") if prefs_row and len(prefs_row) > 1 else ""
+        religion = (prefs_row[2] or "") if prefs_row and len(prefs_row) > 2 else ""
+        culture = (prefs_row[3] or "") if prefs_row and len(prefs_row) > 3 else ""
         run_execute(cursor,
             "SELECT note, created_at FROM notes WHERE LOWER(username)=? ORDER BY created_at DESC LIMIT 5",
             (uname_lower,)
@@ -2948,6 +3191,8 @@ def generate_nutrition_plan():
             f"Sex: {user_sex or 'Not specified'}",
             f"Likes: {likes or 'None'}",
             f"Dislikes: {dislikes or 'None'}",
+            f"Religion / faith practices: {religion or 'None'}",
+            f"Cultural background: {culture or 'None'}",
         ]
         if med[0]: ctx_parts.append(f"Past medical history: {med[0]}")
         if med[1]: ctx_parts.append(f"Patient goals: {med[1]}")
@@ -3018,7 +3263,7 @@ Patient context:
 
 Consistency: weight_loss_calories must stay below maintenance_calories. Avoid extreme starvation-level numbers for adults (e.g. do not recommend sustained intake under ~1200 kcal/day for typical adult females or ~1500 for typical adult males without explicit clinician instruction in the context above).
 
-Return only valid JSON, no other text. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
+Return only valid JSON, no other text. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. Respect religious and cultural practices in Religion/Cultural background fields (e.g. halal, kosher, fasting, traditional cuisines). foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
 
         client = OpenAI(api_key=api_key)
         completion = client.chat.completions.create(

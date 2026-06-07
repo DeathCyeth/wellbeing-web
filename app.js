@@ -1,5 +1,9 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '5.5';
+window.WELLBEING_APP_JS_VERSION = '5.7';
+
+var ONBOARDING_START_TOKEN = '__ONBOARDING_START__';
+var patientOnboardingActive = false;
+var patientOnboardingKickoffStarted = false;
 
 // Current user state
 let currentUser = null;
@@ -230,6 +234,10 @@ function setupEventListeners() {
     if (doctorAiPrintBtn) {
         doctorAiPrintBtn.addEventListener('click', () => printDoctorAiRecommendations());
     }
+    const patientOnboardingFinishBtn = document.getElementById('patientOnboardingFinishBtn');
+    if (patientOnboardingFinishBtn) {
+        patientOnboardingFinishBtn.addEventListener('click', () => finishPatientOnboarding());
+    }
     document.addEventListener('click', function (e) {
         const rateBtn = e.target.closest('.ai-rate-btn');
         if (rateBtn) {
@@ -323,7 +331,8 @@ async function handleLogin() {
             role: user.role || 'Patient',
             patient_id: user.patient_id || '',
             age: user.age || null,
-            feedback_token: user.feedback_token || user.feedbackToken || ''
+            feedback_token: user.feedback_token || user.feedbackToken || '',
+            onboarding_completed: user.onboarding_completed !== false && user.onboarding_completed !== 0
         };
 
         if (!userData.username) {
@@ -422,6 +431,126 @@ function showUserHome() {
     }
 }
 
+function isPatientOnboardingPending() {
+    return !!(currentUser
+        && currentUser.role
+        && currentUser.role.toLowerCase() === 'patient'
+        && (currentUser.onboarding_completed === false || currentUser.onboarding_completed === 0));
+}
+
+function updatePatientOnboardingBanner() {
+    const banner = document.getElementById('patientOnboardingBanner');
+    const subtitle = document.getElementById('patientAiSubtitle');
+    const show = patientOnboardingActive && isPatientOnboardingPending();
+    if (banner) banner.style.display = show ? 'block' : 'none';
+    if (subtitle) {
+        subtitle.textContent = show
+            ? 'Quick welcome chat — answer one question at a time so I can tailor your advice.'
+            : 'Ask me anything about your wellbeing, recipes, or health questions!';
+    }
+}
+
+async function initPatientOnboardingUi() {
+    if (!currentUser || currentUser.role.toLowerCase() !== 'patient') {
+        patientOnboardingActive = false;
+        updatePatientOnboardingBanner();
+        return;
+    }
+    if (currentUser.onboarding_completed === undefined) {
+        try {
+            const user = await apiService.getUserByUsername(currentUser.username);
+            currentUser.onboarding_completed = user.onboarding_completed !== false;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        } catch (e) {
+            console.warn('Could not load onboarding status:', e);
+        }
+    }
+    patientOnboardingActive = isPatientOnboardingPending();
+    updatePatientOnboardingBanner();
+    if (patientOnboardingActive && aiConversationHistory.length === 0 && !patientOnboardingKickoffStarted) {
+        await startPatientOnboardingInterview();
+    }
+}
+
+async function startPatientOnboardingInterview() {
+    if (!currentUser || patientOnboardingKickoffStarted || !patientOnboardingActive) return;
+    patientOnboardingKickoffStarted = true;
+    const responseDiv = document.getElementById('aiResponse');
+    const submitBtn = document.getElementById('aiSubmitBtn');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Starting...';
+    }
+    if (responseDiv) {
+        responseDiv.innerHTML = '<div class="conversation-container"><div class="loading" style="display:flex;align-items:center;gap:10px;margin-top:12px;"><div class="spinner"></div> Starting your welcome chat...</div></div>';
+    }
+    try {
+        const res = await apiService.getAIAdvice(
+            ONBOARDING_START_TOKEN,
+            currentUser.name,
+            '', '', [], [],
+            {},
+            null,
+            null,
+            '',
+            currentUser.username,
+            currentUser.username,
+            '', '',
+            true
+        );
+        const text = (res && res.response) ? res.response : '';
+        if (!text || !String(text).trim()) {
+            throw new Error('Empty welcome message from AI');
+        }
+        aiConversationHistory.push({
+            role: 'assistant',
+            content: text,
+            references: (res && Array.isArray(res.references)) ? res.references : [],
+            log_id: (res && res.log_id) ? res.log_id : null,
+            rating: null
+        });
+        updateConversationDisplay();
+        if (responseDiv) responseDiv.scrollTop = responseDiv.scrollHeight;
+    } catch (e) {
+        patientOnboardingKickoffStarted = false;
+        if (responseDiv) {
+            responseDiv.innerHTML = '<p class="ai-placeholder">Could not start welcome chat. Type a message below to begin.</p>';
+        }
+        console.error('Onboarding kickoff error:', e);
+        showToast(e.message || 'Could not start welcome chat', 'error');
+    }
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Send';
+    }
+}
+
+async function finishPatientOnboarding() {
+    if (!currentUser || !patientOnboardingActive) return;
+    const btn = document.getElementById('patientOnboardingFinishBtn');
+    const historyForApi = aiConversationHistory.map(function (m) {
+        return { role: m.role, content: m.content || '' };
+    });
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+    }
+    try {
+        await apiService.finishPatientOnboarding(currentUser.username, historyForApi);
+        currentUser.onboarding_completed = true;
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        patientOnboardingActive = false;
+        updatePatientOnboardingBanner();
+        showToast('Saved to your profile — thanks for sharing!', 'success');
+    } catch (e) {
+        showToast(e.message || 'Could not save intro', 'error');
+    }
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Save intro to my profile';
+    }
+}
+
 // Patient Home
 async function showPatientHome() {
     console.log('Showing patient home for:', currentUser);
@@ -453,23 +582,20 @@ async function showPatientHome() {
     // Load account information
     await loadPatientAccount();
     
-    // Clear AI response but keep conversation history
     const aiResponseEl = document.getElementById('aiResponse');
     const aiQuestionEl = document.getElementById('aiQuestion');
     if (aiResponseEl) {
-        aiResponseEl.innerHTML = '<p class="ai-placeholder">AI response will appear here...</p>';
+        if (aiConversationHistory.length > 0) {
+            updateConversationDisplay();
+        } else {
+            aiResponseEl.innerHTML = '<p class="ai-placeholder">AI response will appear here...</p>';
+        }
     }
     if (aiQuestionEl) {
         aiQuestionEl.value = '';
     }
-    
-    // AI form should already have event listener from setupEventListeners
-    // No need to re-attach it here to avoid duplicates
-    
-    // Initialize conversation history if needed (keep existing if already started)
-    if (aiConversationHistory.length === 0) {
-        // Will be initialized when first AI call is made
-    }
+
+    await initPatientOnboardingUi();
 }
 
 // Patient Tab Navigation - Make it globally accessible
@@ -590,8 +716,12 @@ async function loadPatientAccount() {
         const prefs = await apiService.getLikesDislikes(currentUser.username);
         const likesEl = document.getElementById('patientLikes');
         const dislikesEl = document.getElementById('patientDislikes');
+        const religionEl = document.getElementById('patientReligion');
+        const cultureEl = document.getElementById('patientCulture');
         if (likesEl) likesEl.value = prefs.likes || '';
         if (dislikesEl) dislikesEl.value = prefs.dislikes || '';
+        if (religionEl) religionEl.value = prefs.religion || '';
+        if (cultureEl) cultureEl.value = prefs.culture || '';
     } catch (error) {
         console.error('Error loading preferences:', error);
     }
@@ -755,10 +885,12 @@ function generateMedicalSummary(user, medicalInfo, prefs, showAll) {
     }
 
     // Preferences (likes/dislikes – doctor can edit)
-    if (showAll || (prefs && (prefs.likes || prefs.dislikes))) {
+    if (showAll || (prefs && (prefs.likes || prefs.dislikes || prefs.religion || prefs.culture))) {
         parts.push('<div style="margin-bottom: 15px;"><strong style="color: var(--primary-color);">Preferences</strong>');
         parts.push(`<br>• Likes: ${prefs && prefs.likes ? escapeHtml(prefs.likes) : empty}`);
         parts.push(`<br>• Dislikes: ${prefs && prefs.dislikes ? escapeHtml(prefs.dislikes) : empty}`);
+        parts.push(`<br>• Religion / faith practices: ${prefs && prefs.religion ? escapeHtml(prefs.religion) : empty}`);
+        parts.push(`<br>• Cultural background: ${prefs && prefs.culture ? escapeHtml(prefs.culture) : empty}`);
         parts.push('</div>');
     }
 
@@ -789,6 +921,8 @@ function buildPatientContextText(user, medicalInfo, prefs, notes) {
     const pr = prefs || {};
     if (pr.likes) p.push(`Likes: ${pr.likes}`);
     if (pr.dislikes) p.push(`Dislikes: ${pr.dislikes}`);
+    if (pr.religion) p.push(`Religion / faith practices: ${pr.religion}`);
+    if (pr.culture) p.push(`Cultural background: ${pr.culture}`);
     if (notes && notes.length > 0) {
         p.push('Recent notes: ' + notes.slice(0, 3).map(n => (n.note || '')).join(' | '));
     }
@@ -830,7 +964,12 @@ async function loadPatientNotesSummary() {
         }
         // If empty and we have patient_id, try by patient_id (doctor may have saved under 816279)
         const medicalInfoEmpty = !Object.values(medicalInfo || {}).some(v => v && String(v).trim());
-        const prefsEmpty = !(prefs && ((prefs.likes && prefs.likes.trim()) || (prefs.dislikes && prefs.dislikes.trim())));
+        const prefsEmpty = !(prefs && (
+            (prefs.likes && prefs.likes.trim())
+            || (prefs.dislikes && prefs.dislikes.trim())
+            || (prefs.religion && prefs.religion.trim())
+            || (prefs.culture && prefs.culture.trim())
+        ));
         if ((medicalInfoEmpty || prefsEmpty) && canonicalPatientId) {
             if (medicalInfoEmpty) {
                 const medById = await apiService.getMedicalInfoByPatientId(canonicalPatientId).catch(() => ({}));
@@ -839,8 +978,13 @@ async function loadPatientNotesSummary() {
                 }
             }
             if (prefsEmpty) {
-                const prefsById = await apiService.getLikesDislikesByPatientId(canonicalPatientId).catch(() => ({ likes: '', dislikes: '' }));
-                if (prefsById && ((prefsById.likes && prefsById.likes.trim()) || (prefsById.dislikes && prefsById.dislikes.trim()))) {
+                const prefsById = await apiService.getLikesDislikesByPatientId(canonicalPatientId).catch(() => ({ likes: '', dislikes: '', religion: '', culture: '' }));
+                if (prefsById && (
+                    (prefsById.likes && prefsById.likes.trim())
+                    || (prefsById.dislikes && prefsById.dislikes.trim())
+                    || (prefsById.religion && prefsById.religion.trim())
+                    || (prefsById.culture && prefsById.culture.trim())
+                )) {
                     prefs = prefsById;
                 }
             }
@@ -932,9 +1076,11 @@ async function loadPatientNotesSummary() {
 async function savePatientPreferences() {
     const likes = document.getElementById('patientLikes').value;
     const dislikes = document.getElementById('patientDislikes').value;
+    const religion = document.getElementById('patientReligion').value;
+    const culture = document.getElementById('patientCulture').value;
 
     try {
-        await apiService.upsertLikesDislikes(currentUser.username, likes, dislikes);
+        await apiService.upsertLikesDislikes(currentUser.username, likes, dislikes, religion, culture);
         showToast('Preferences saved', 'success');
     } catch (error) {
         showToast('Error saving preferences', 'error');
@@ -1022,7 +1168,7 @@ window.getAIAdvice = async function getAIAdvice() {
     
     try {
         // Get user preferences and notes for context (only on first message)
-        let prefs = { likes: '', dislikes: '' };
+        let prefs = { likes: '', dislikes: '', religion: '', culture: '' };
         let notes = [];
         
         let medicalInfo = {};
@@ -1044,7 +1190,7 @@ window.getAIAdvice = async function getAIAdvice() {
                 if (!medicalInfo || typeof medicalInfo !== 'object') medicalInfo = {};
             } catch (prefError) {
                 console.warn('Could not load preferences/notes/medical for AI context:', prefError);
-                prefs = { likes: '', dislikes: '' };
+                prefs = { likes: '', dislikes: '', religion: '', culture: '' };
                 notes = [];
                 medicalInfo = {};
             }
@@ -1056,6 +1202,8 @@ window.getAIAdvice = async function getAIAdvice() {
             userName: currentUser.name,
             likes: prefs.likes || '',
             dislikes: prefs.dislikes || '',
+            religion: prefs.religion || '',
+            culture: prefs.culture || '',
             notesCount: notes.length,
             hasMedicalInfo: !!medicalInfo && Object.keys(medicalInfo).length > 0,
             conversationHistoryLength: aiConversationHistory.length - 1
@@ -1080,7 +1228,10 @@ window.getAIAdvice = async function getAIAdvice() {
             null,
             '',
             currentUser.username,
-            currentUser.username
+            currentUser.username,
+            prefs.religion || '',
+            prefs.culture || '',
+            patientOnboardingActive
         );
         
         console.log('AI API response:', aiResponse);
@@ -2567,6 +2718,8 @@ function logout() {
     currentUser = null;
     doctorAIConversationHistory = [];
     aiConversationHistory = []; // Clear conversation on logout
+    patientOnboardingActive = false;
+    patientOnboardingKickoffStarted = false;
     localStorage.removeItem('currentUser');
     showScreen('loginScreen');
     // Clear forms

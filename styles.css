@@ -985,6 +985,16 @@ body {
     font-size: 0.95rem;
 }
 
+.patient-onboarding-banner {
+    margin: 0 0 16px 0;
+    padding: 14px 16px;
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.12), rgba(33, 150, 243, 0.08));
+    border: 1px solid rgba(76, 175, 80, 0.35);
+    border-radius: 8px;
+    position: relative;
+    z-index: 2;
+}
+
 .ai-response {
     margin-top: 20px;
     padding: 16px;

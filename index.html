@@ -130,12 +130,17 @@
                                 <span style="display: none; font-size: 1.8rem;">🤖</span>
                                 <span>AI Companion</span>
                             </h3>
-                            <p class="ai-subtitle" style="margin: 0; color: var(--text-light);">Ask me anything about your wellbeing, recipes, or health questions!</p>
+                            <p class="ai-subtitle" id="patientAiSubtitle" style="margin: 0; color: var(--text-light);">Ask me anything about your wellbeing, recipes, or health questions!</p>
                         </div>
                         <div style="display: flex; gap: 8px; flex-wrap: wrap; position: relative; z-index: 10;">
                             <button type="button" class="btn btn-link" id="patientAiPrintBtn" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color); display: none;">Print</button>
                             <button type="button" class="btn btn-link" onclick="clearConversation()" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color);">Clear Chat</button>
                         </div>
+                    </div>
+                    <div id="patientOnboardingBanner" class="patient-onboarding-banner" style="display: none;">
+                        <p style="margin: 0 0 10px 0;"><strong>Welcome!</strong> I'm going to ask a few quick questions to personalize your advice.</p>
+                        <p style="margin: 0 0 12px 0; font-size: 0.9rem; color: var(--text-light);">Answer in the chat below — including goals, food preferences, religion, and culture if you'd like. When you're done, save what we discussed to your profile.</p>
+                        <button type="button" class="btn btn-secondary" id="patientOnboardingFinishBtn">Save intro to my profile</button>
                     </div>
                     <form id="aiForm" style="position: relative; z-index: 2;">
                         <div class="form-group" style="position: relative; z-index: 2;">
@@ -211,6 +216,14 @@
                         <div class="form-group">
                             <label for="patientDislikes">Dislikes (comma or line separated)</label>
                             <textarea id="patientDislikes" rows="3" placeholder="e.g., Spicy food, Loud noises"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="patientReligion">Religion / faith practices (optional)</label>
+                            <textarea id="patientReligion" rows="2" placeholder="e.g., Muslim — halal; Jewish — kosher; Hindu vegetarian; fasting during Ramadan"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="patientCulture">Cultural background (optional)</label>
+                            <textarea id="patientCulture" rows="2" placeholder="e.g., Caribbean heritage; prefer traditional West African dishes"></textarea>
                         </div>
                         <button type="submit" class="btn btn-primary">Save Preferences</button>
                     </form>
@@ -508,7 +521,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="api-service.js?v=4.3"></script>
-    <script src="app.js?v=5.5"></script>
+    <script src="app.js?v=5.7"></script>
     <script>
         // Show which site we're on (so tablet users can confirm same URL as desktop)
         (function () {
