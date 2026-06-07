@@ -49,12 +49,16 @@ try:
         gather_open_source_clinical_bundle,
         build_repository_pubmed_block,
         pubmed_references_for_pmids,
+        rank_pmids_for_question,
+        filter_pubmed_references_cited_in_response,
     )
 except ImportError:
     gather_open_source_clinical_block = None
     gather_open_source_clinical_bundle = None
     build_repository_pubmed_block = None
     pubmed_references_for_pmids = None
+    rank_pmids_for_question = None
+    filter_pubmed_references_cited_in_response = None
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -2409,11 +2413,21 @@ def update_medical_info(username):
 
 # Every AI reply must include citations (prepended as first system message on every request)
 AI_CITATION_RULE_DOCTOR = """Citation rule (applies to EVERY reply, no exceptions—including brief answers, follow-ups, and clarifications):
-After your main answer, always add a section with this exact heading on its own line:
+After your main answer, add a section with this exact heading on its own line:
 **Supporting references**
-Then at least 2 bullet points. If a system message in this request contains "Web search results", you MUST include at least one bullet with a markdown link [source title](url) for any web information you used—copy URLs EXACTLY from the "URL:" lines in that block only. You may add other bullets naming guideline bodies (ADA, WHO, NHS, etc.) without URLs when not from web results. If there is no web search block, do not invent URLs—name organizations/topics only. If the reply is only restating patient data from context, include one bullet noting patient context and still add guideline-style references.
+Then 1–3 bullet points ONLY—each must directly support a specific claim in your answer above.
 
-Evidence discipline: When system messages include PubMed/openFDA excerpts, web search results, or the literature repository block, use only those passages to support clinical, nutrition, or medication statements. If a passage is off-topic for the question, do not cite or restate it as if it applied. Do not invent PMIDs, DOIs, or URLs. For calories, BMR, or TDEE numbers, either derive them step-by-step from explicit patient metrics in this thread or label them clearly as general educational estimates—not personalized medical facts."""
+Relevance gate (critical):
+- Read each provided source block (web search, PubMed, openFDA, literature repository) before citing. Use a source ONLY if its title/excerpt clearly relates to the user's question.
+- If a provided source is off-topic, skip it entirely. Never cite random or tangential articles to fill space.
+- If no provided source fits, do not cite them. Instead give 1 bullet naming a trusted guideline body (e.g. ADA, WHO, NHS) relevant to the topic—no invented URLs.
+
+Linking:
+- Web search: markdown [title](url) using ONLY "URL:" lines from the web search block for facts you used.
+- PubMed/repository: markdown [short title](https://pubmed.ncbi.nlm.nih.gov/PMID/) for articles you actually relied on.
+- Never invent PMIDs, DOIs, or URLs.
+
+Evidence discipline: PubMed/openFDA/web/repository excerpts are optional background—not a checklist. Ignore unrelated snippets. For calories/BMR/TDEE, derive from explicit patient metrics or label as general educational estimates."""
 
 ONBOARDING_START_TOKEN = "__ONBOARDING_START__"
 
@@ -2431,14 +2445,35 @@ Interview rules:
 Citation rule during this interview only: after your reply, add **Supporting references** with exactly ONE brief bullet (e.g. general NHS or WHO wellbeing guidance)—no URLs required."""
 
 AI_CITATION_RULE_PATIENT = """Citation rule (applies to EVERY reply, no exceptions—including short answers and follow-ups):
-After your main answer, always add a section with this exact heading on its own line:
+After your main answer, add a section with this exact heading on its own line:
 **Supporting references**
-At least 2 bullet points. If a system message contains "Web search results", include markdown links [title](url) using ONLY URLs copied exactly from that block for web-based information. If there is no web search block, name sources by organization/topic only—do not invent URLs. If you relied mainly on profile/notes from this app, say so in one bullet and add general references.
+Then 1–3 bullet points ONLY—each must directly support something you said in your answer.
 
-Evidence discipline: When PubMed, openFDA, web search, or curated repository text is provided, prefer it for factual health claims and ignore unrelated snippets. Never fabricate study links or PMIDs. For calorie or body-composition numbers, say they are estimates unless they are clearly calculated from your saved profile data in this app; if data is missing, give general guidance and encourage checking with your care team."""
+Relevance gate (critical):
+- Before citing any provided source (web search, PubMed, openFDA, literature repository), check that its title/excerpt clearly matches the user's question.
+- Skip off-topic sources completely. Never list random studies or links just to have references.
+- If nothing provided fits, use 1 bullet citing a well-known organization relevant to the topic (e.g. NHS, WHO, ADA)—by name only, no invented URLs.
+- If you relied mainly on this app's profile/notes, say so in one bullet.
+
+Linking:
+- Web: [title](url) with URLs copied exactly from the web search block.
+- PubMed: [short title](https://pubmed.ncbi.nlm.nih.gov/PMID/) only for articles you used.
+- Never fabricate links or PMIDs.
+
+Evidence discipline: Ignore unrelated PubMed/web/repository snippets. For calorie or body-composition numbers, say they are estimates unless calculated from saved profile data; encourage checking with the care team when unsure."""
 
 
-def tavily_web_search(query: str, max_results: int = 6):
+def _tavily_health_domains():
+    raw = os.environ.get('AI_WEB_SEARCH_DOMAINS', '').strip()
+    if raw:
+        return [d.strip() for d in raw.split(',') if d.strip()]
+    return [
+        'nih.gov', 'nhs.uk', 'who.int', 'cdc.gov', 'pubmed.ncbi.nlm.nih.gov',
+        'diabetes.org', 'heart.org', 'cancer.gov', 'medlineplus.gov', 'fda.gov',
+    ]
+
+
+def tavily_web_search(query: str, max_results: int = 4):
     """
     Search the web via Tavily (https://tavily.com). Set TAVILY_API_KEY in the environment.
     Returns a plain-text block for the model, or None if disabled / error.
@@ -2450,23 +2485,31 @@ def tavily_web_search(query: str, max_results: int = 6):
         return None
     try:
         import httpx
-        resp = httpx.post(
-            'https://api.tavily.com/search',
-            json={
-                'api_key': api_key,
-                'query': query.strip()[:500],
-                'search_depth': 'basic',
-                'max_results': max_results,
-                'include_answer': False,
-            },
-            timeout=20.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get('results') or []
+        q = query.strip()[:500]
+        base_payload = {
+            'api_key': api_key,
+            'query': q,
+            'search_depth': 'advanced',
+            'max_results': max_results,
+            'include_answer': False,
+        }
+        results = []
+        for payload in (
+            {**base_payload, 'include_domains': _tavily_health_domains()},
+            base_payload,
+        ):
+            resp = httpx.post('https://api.tavily.com/search', json=payload, timeout=22.0)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get('results') or []
+            if results:
+                break
         if not results:
             return None
-        lines = ['--- Web search results (use only these URLs when linking) ---']
+        lines = [
+            '--- Web search results (cite ONLY if excerpt is relevant to the user question) ---',
+            'Ignore any result whose snippet does not match the question. Use markdown links only for results you actually used.',
+        ]
         for i, r in enumerate(results, 1):
             title = (r.get('title') or 'Source')[:220]
             url = (r.get('url') or '').strip()
@@ -2474,7 +2517,7 @@ def tavily_web_search(query: str, max_results: int = 6):
             if not url:
                 continue
             lines.append(f'[{i}] {title}\nURL: {url}\n{content}\n')
-        return '\n'.join(lines) if len(lines) > 1 else None
+        return '\n'.join(lines) if len(lines) > 2 else None
     except Exception as e:
         print(f'Tavily web search error: {e}')
         return None
@@ -2977,7 +3020,14 @@ Provide helpful, personalized advice that takes into account the user's preferen
 
         # Curated literature repository (practice-wide + per-patient PMIDs)
         skip_search = bool(image and str(image).startswith('data:image')) or onboarding_interview
-        repo_pmids = literature_ordered_pmids(context_username)
+        all_repo_pmids = literature_ordered_pmids(context_username)
+        repo_pmids = all_repo_pmids
+        if rank_pmids_for_question and all_repo_pmids and not skip_search:
+            try:
+                repo_pmids = rank_pmids_for_question(question, all_repo_pmids, top_k=4)
+            except Exception as e:
+                print(f'repo pmid rank error: {e}')
+                repo_pmids = all_repo_pmids[:4]
         query_pmids = []
         if build_repository_pubmed_block and repo_pmids and not skip_search:
             try:
@@ -2987,9 +3037,9 @@ Provide helpful, personalized advice that takes into account the user's preferen
                         'role': 'system',
                         'content': (
                             'Curated PubMed articles from your literature repository (practice-wide and/or this patient). '
-                            'Prioritize when relevant. In **Supporting references**, use markdown links with URLs from '
-                            'the "URL:" lines below. You may use the short citation form "Title (AuthorLast, Year)" when '
-                            'it matches these sources.\n\n' + repo_block
+                            'These were pre-filtered for relevance to the user question—still verify each excerpt before citing. '
+                            'In **Supporting references**, include markdown links only for articles you actually used.\n\n'
+                            + repo_block
                         ),
                     })
             except Exception as e:
@@ -3007,8 +3057,8 @@ Provide helpful, personalized advice that takes into account the user's preferen
                         'role': 'system',
                         'content': (
                             'The following excerpts come from open public data: PubMed (NLM) and/or openFDA (FDA). '
-                            'They are general reference only—not individualized medical advice. In **Supporting references**, '
-                            'include markdown links using ONLY the PubMed "URL:" lines below and/or the openFDA URL line given. '
+                            'Use ONLY excerpts that directly answer the user question—skip the rest. '
+                            'In **Supporting references**, link only sources you relied on, using PubMed "URL:" lines below. '
                             'Do not invent PMIDs or links.\n\n'
                             + os_clinical
                         ),
@@ -3023,9 +3073,9 @@ Provide helpful, personalized advice that takes into account the user's preferen
                 messages.append({
                     'role': 'system',
                     'content': (
-                        'The following is from a live web search for the user\'s latest question. '
-                        'Prefer this for current facts when it helps. In **Supporting references**, include '
-                        'markdown links [title](url) using ONLY the URLs from the lines starting with "URL:" below—copy them exactly.\n\n'
+                        'Live web search for the user\'s latest question. '
+                        'Read each snippet—cite ONLY results that clearly relate to the question. '
+                        'In **Supporting references**, use markdown [title](url) with URLs from "URL:" lines below.\n\n'
                         + web_block
                     ),
                 })
@@ -3073,7 +3123,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
             model=model,
             messages=messages,
             max_tokens=950,
-            temperature=0.7
+            temperature=0.35
         )
         
         response_text = completion.choices[0].message.content
@@ -3088,7 +3138,13 @@ Provide helpful, personalized advice that takes into account the user's preferen
         references = []
         if pubmed_references_for_pmids and all_pmids:
             try:
-                references = pubmed_references_for_pmids(all_pmids)
+                candidate_refs = pubmed_references_for_pmids(all_pmids)
+                if filter_pubmed_references_cited_in_response:
+                    references = filter_pubmed_references_cited_in_response(
+                        response_text, candidate_refs
+                    )
+                else:
+                    references = candidate_refs
             except Exception as e:
                 print(f'pubmed_references_for_pmids error: {e}')
 

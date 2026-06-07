@@ -1,5 +1,5 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '5.7';
+window.WELLBEING_APP_JS_VERSION = '5.8';
 
 var ONBOARDING_START_TOKEN = '__ONBOARDING_START__';
 var patientOnboardingActive = false;
@@ -1945,6 +1945,97 @@ function formatCollapsibleSourcesHtml(title, itemHtmlList) {
     return html;
 }
 
+function extractCitedPmidsFromText(text) {
+    const raw = String(text || '');
+    const seen = {};
+    const ordered = [];
+    const patterns = [
+        /pubmed\.ncbi\.nlm\.nih\.gov\/(\d+)/gi,
+        /\bPMID[:\s#]*(\d+)\b/gi
+    ];
+    patterns.forEach(function (re) {
+        var m;
+        re.lastIndex = 0;
+        while ((m = re.exec(raw)) !== null) {
+            var p = m[1];
+            if (p && !seen[p]) {
+                seen[p] = true;
+                ordered.push(p);
+            }
+        }
+    });
+    return ordered;
+}
+
+function extractCitedUrlsFromText(text) {
+    const raw = String(text || '');
+    const seen = {};
+    const ordered = [];
+    var m;
+    const mdRe = /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+    while ((m = mdRe.exec(raw)) !== null) {
+        var u = m[2].replace(/[).,;]+$/, '');
+        if (u && !seen[u]) {
+            seen[u] = true;
+            ordered.push(u.toLowerCase());
+        }
+    }
+    const bareRe = /(https?:\/\/[^\s)\]>"']+)/g;
+    while ((m = bareRe.exec(raw)) !== null) {
+        u = m[1].replace(/[).,;]+$/, '');
+        if (u && !seen[u]) {
+            seen[u] = true;
+            ordered.push(u.toLowerCase());
+        }
+    }
+    return ordered;
+}
+
+function filterPubmedRefsForReply(replyText, refs) {
+    if (!refs || !refs.length) return [];
+    const text = String(replyText || '');
+    if (!text.trim()) return [];
+    const citedPmids = extractCitedPmidsFromText(text);
+    if (citedPmids.length) {
+        const byPmid = {};
+        refs.forEach(function (r) {
+            if (r && r.pmid) byPmid[String(r.pmid)] = r;
+        });
+        return citedPmids.map(function (p) { return byPmid[p]; }).filter(Boolean);
+    }
+    const citedUrls = extractCitedUrlsFromText(text);
+    if (citedUrls.length) {
+        const matched = [];
+        const seenP = {};
+        refs.forEach(function (r) {
+            var url = String(r && r.url || '').replace(/\/$/, '').toLowerCase();
+            if (!url) return;
+            var hit = citedUrls.some(function (cu) { return url.indexOf(cu) >= 0 || cu.indexOf(url) >= 0; });
+            if (hit) {
+                var pmid = String(r.pmid || '');
+                if (pmid && seenP[pmid]) return;
+                if (pmid) seenP[pmid] = true;
+                matched.push(r);
+            }
+        });
+        if (matched.length) return matched;
+    }
+    const lower = text.toLowerCase();
+    const titleMatched = [];
+    const seenP2 = {};
+    refs.forEach(function (r) {
+        var title = String(r && r.title || '').trim();
+        if (title.length < 12) return;
+        if (lower.indexOf(title.slice(0, 48).toLowerCase()) >= 0) {
+            var pmid2 = String(r.pmid || '');
+            if (pmid2 && seenP2[pmid2]) return;
+            if (pmid2) seenP2[pmid2] = true;
+            titleMatched.push(r);
+        }
+    });
+    return titleMatched;
+}
+
 function formatReferencesHtml(refs) {
     if (!refs || !refs.length) return '';
     const items = refs.map(function (r, i) {
@@ -3004,8 +3095,9 @@ function formatAssistantReplyHtml(content, references) {
     }
 
     let html = bodyHtml;
-    if (pubmedRefs.length) {
-        html += formatReferencesHtml(pubmedRefs);
+    const citedPubmedRefs = filterPubmedRefsForReply(normalized, pubmedRefs);
+    if (citedPubmedRefs.length) {
+        html += formatReferencesHtml(citedPubmedRefs);
     } else if (refItems.length) {
         html += formatSupportingReferencesBlockHtml(refItems);
     }

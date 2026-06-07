@@ -34,6 +34,174 @@ def _eutils_params(extra: dict) -> dict:
     return p
 
 
+_QUERY_STOP = {
+    "what", "when", "where", "which", "who", "how", "why", "does", "have", "been",
+    "from", "with", "that", "this", "your", "about", "into", "some", "than", "them",
+    "then", "there", "these", "those", "very", "just", "only", "also", "like", "make",
+    "help", "take", "safe", "good", "best", "food", "diet", "much", "many", "more",
+    "most", "should", "could", "would", "patient", "doctor", "symptoms", "cause",
+    "treatment", "medication", "medications", "drug", "drugs", "pill", "pills", "dose",
+    "can", "will", "are", "was", "were", "being", "been", "being", "tell", "give",
+    "need", "want", "know", "think", "feel", "please", "thanks", "hello", "today",
+    "recommend", "suggest", "advice", "anything", "something", "really", "still",
+}
+
+
+def _question_keywords(q: str) -> List[str]:
+    """Meaningful tokens from a user question for relevance scoring."""
+    raw = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", (q or "").lower())
+    out: List[str] = []
+    for t in raw:
+        if t in _QUERY_STOP:
+            continue
+        if t not in out:
+            out.append(t)
+        if len(out) >= 10:
+            break
+    return out
+
+
+def _build_pubmed_search_query(question: str) -> str:
+    """Tighter PubMed search string than raw chat text."""
+    q = (question or "").strip()
+    if len(q) < 4:
+        return q
+    kws = _question_keywords(q)
+    if len(kws) >= 2:
+        return " ".join(kws[:8])[:400]
+    cleaned = re.sub(
+        r"\b(?:what|how|why|when|should|could|would|can|is|are|do|does|did|will|the|a|an|my|me|i|you|your|about|for|with|from)\b",
+        " ",
+        q,
+        flags=re.I,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return (cleaned or q)[:400]
+
+
+def extract_cited_pmids(text: str) -> List[str]:
+    """PMIDs explicitly linked or mentioned in model reply text."""
+    if not text:
+        return []
+    seen: set = set()
+    ordered: List[str] = []
+    patterns = [
+        r"pubmed\.ncbi\.nlm\.nih\.gov/(\d+)",
+        r"\bPMID[:\s#]*(\d+)\b",
+        r"\bpmid[:\s#]*(\d+)\b",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, text, re.I):
+            p = m.group(1).strip()
+            if p.isdigit() and p not in seen:
+                seen.add(p)
+                ordered.append(p)
+    return ordered
+
+
+def extract_cited_urls(text: str) -> List[str]:
+    """URLs from markdown links or bare https in reply text."""
+    if not text:
+        return []
+    seen: set = set()
+    ordered: List[str] = []
+    for m in re.finditer(r"\[([^\]]*)\]\((https?://[^)\s]+)\)", text):
+        u = m.group(2).strip().rstrip(").,;")
+        if u not in seen:
+            seen.add(u)
+            ordered.append(u)
+    for m in re.finditer(r"(https?://[^\s)\]>\"']+)", text):
+        u = m.group(1).strip().rstrip(").,;")
+        if u not in seen:
+            seen.add(u)
+            ordered.append(u)
+    return ordered
+
+
+def rank_pmids_for_question(question: str, pmids: List[str], top_k: int = 4) -> List[str]:
+    """Return PMIDs whose titles best match the question (repository filtering)."""
+    if not pmids:
+        return []
+    kws = _question_keywords(question)
+    capped = []
+    seen: set = set()
+    for p in pmids:
+        ps = (p or "").strip()
+        if ps.isdigit() and ps not in seen:
+            seen.add(ps)
+            capped.append(ps)
+        if len(capped) >= 25:
+            break
+    if not kws:
+        return capped[:top_k]
+    try:
+        data = _pubmed_esummary_json(capped)
+    except Exception:
+        return capped[:top_k]
+    result = data.get("result") or {}
+    scored: List[Tuple[int, str]] = []
+    for uid in result.get("uids") or []:
+        rec = result.get(uid)
+        if not isinstance(rec, dict):
+            continue
+        title = (rec.get("title") or "").lower()
+        score = sum(1 for k in kws if k in title)
+        if score > 0:
+            scored.append((score, str(uid)))
+    if not scored:
+        return capped[:top_k]
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [p for _, p in scored[:top_k]]
+
+
+def filter_pubmed_references_cited_in_response(
+    response_text: str, references: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Keep only PubMed metadata rows the assistant actually cited in its reply."""
+    if not references or not response_text:
+        return []
+    text = response_text or ""
+    text_lower = text.lower()
+    cited_pmids = extract_cited_pmids(text)
+    if cited_pmids:
+        by_pmid = {str(r.get("pmid")): r for r in references if r.get("pmid")}
+        return [by_pmid[p] for p in cited_pmids if p in by_pmid]
+
+    cited_urls = {u.rstrip("/").lower() for u in extract_cited_urls(text)}
+    if cited_urls:
+        matched: List[Dict[str, Any]] = []
+        seen_pmids: set = set()
+        for ref in references:
+            url = (ref.get("url") or "").strip().rstrip("/").lower()
+            if not url:
+                continue
+            if any(url in cu or cu in url for cu in cited_urls):
+                pmid = str(ref.get("pmid") or "")
+                if pmid and pmid in seen_pmids:
+                    continue
+                if pmid:
+                    seen_pmids.add(pmid)
+                matched.append(ref)
+        if matched:
+            return matched
+
+    matched_title: List[Dict[str, Any]] = []
+    seen_pmids2: set = set()
+    for ref in references:
+        title = (ref.get("title") or "").strip()
+        if len(title) < 12:
+            continue
+        snippet = title[:48].lower()
+        if snippet in text_lower:
+            pmid = str(ref.get("pmid") or "")
+            if pmid and pmid in seen_pmids2:
+                continue
+            if pmid:
+                seen_pmids2.add(pmid)
+            matched_title.append(ref)
+    return matched_title
+
+
 def _tokenize_for_fda(q: str) -> List[str]:
     """Short tokens that might match generic/brand names in openFDA."""
     raw = re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", (q or "").lower())
@@ -57,6 +225,7 @@ def _tokenize_for_fda(q: str) -> List[str]:
 
 
 def _pubmed_search_ids(term: str, retmax: int = 5) -> List[str]:
+    term = _build_pubmed_search_query(term) if term else ""
     term = (term or "").strip()[:400]
     if len(term) < 4:
         return []
@@ -307,7 +476,8 @@ def build_repository_pubmed_block(pmids: List[str], max_abstract_len: int = 800)
         return None
     lines = [
         "--- Curated literature repository (your practice / patient-linked PubMed IDs) ---",
-        "Prioritize these when relevant to the question. Link: https://pubmed.ncbi.nlm.nih.gov/PMID/",
+        "ONLY cite an article below if it directly supports your answer to the user's question. "
+        "Skip any that are off-topic. Link: https://pubmed.ncbi.nlm.nih.gov/PMID/",
     ]
     for pmid, title, abstract in articles:
         url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
@@ -319,7 +489,7 @@ def build_repository_pubmed_block(pmids: List[str], max_abstract_len: int = 800)
 
 
 def gather_open_source_clinical_bundle(
-    question: str, pubmed_max: int = 4
+    question: str, pubmed_max: int = 3
 ) -> Dict[str, Any]:
     """
     PubMed query search + openFDA. Returns text_block, query_pmids (from search only).
@@ -338,7 +508,9 @@ def gather_open_source_clinical_bundle(
         if articles:
             lines = [
                 "--- PubMed / NLM (peer-reviewed literature index; abstracts may be incomplete) ---",
-                "Use for general background only. Link format for references: https://pubmed.ncbi.nlm.nih.gov/PMID/",
+                "ONLY use an entry below if its title and abstract directly help answer the user's question. "
+                "If none are on-topic, ignore this entire block—do not cite these articles. "
+                "Link format: https://pubmed.ncbi.nlm.nih.gov/PMID/",
             ]
             for pmid, title, abstract in articles:
                 url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
