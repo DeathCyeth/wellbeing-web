@@ -186,16 +186,6 @@ class ApiService {
         return await this.request(`/users/by-patient-id/${patientId}`);
     }
 
-    /** List all patients for dropdown: [{ username, name, patient_id }] */
-    async getPatients() {
-        try {
-            return await this.request('/users/patients');
-        } catch (error) {
-            console.warn('Could not load patient list:', error);
-            return [];
-        }
-    }
-
     async updateUser(username, name, age = null, sex = null) {
         return await this.request(`/users/${username}`, {
             method: 'PUT',
@@ -224,46 +214,6 @@ class ApiService {
         return await this.request(`/users/${username}/preferences`, {
             method: 'POST',
             body: { likes, dislikes, religion, culture },
-        });
-    }
-
-    // Doctor Notes
-    async getDoctorNotes(username) {
-        try {
-            return await this.request(`/users/${username}/notes`);
-        } catch (error) {
-            return [];
-        }
-    }
-
-    async getDoctorNotesByPatientId(patientId) {
-        try {
-            return await this.request(`/users/by-patient-id/${patientId}/notes`);
-        } catch (error) {
-            return [];
-        }
-    }
-
-    async getDoctorNotesSummary(username) {
-        try {
-            return await this.request(`/users/${username}/notes/summary`);
-        } catch (error) {
-            return { summary: "No notes available.", total_notes: 0 };
-        }
-    }
-
-    async getDoctorNotesSummaryByPatientId(patientId) {
-        try {
-            return await this.request(`/users/by-patient-id/${patientId}/notes/summary`);
-        } catch (error) {
-            return { summary: "No notes available.", total_notes: 0 };
-        }
-    }
-
-    async addDoctorNote(username, note) {
-        return await this.request(`/users/${username}/notes`, {
-            method: 'POST',
-            body: { note },
         });
     }
 
@@ -308,8 +258,7 @@ class ApiService {
         });
     }
 
-    // AI Companion with conversation history (medicalInfo = doctor-recorded data; image = optional base64/data URL for current message)
-    // role = 'doctor' and patient_context for doctor-side AI
+    // AI Companion with conversation history (medicalInfo = user profile data; image = optional base64/data URL for current message)
     async getAIAdvice(question, userName, likes, dislikes, notes, conversationHistory = [], medicalInfo = {}, image = null, role = null, patientContext = '', contextUsername = '', actingUsername = '', religion = '', culture = '', onboardingInterview = false) {
         const body = {
             question,
@@ -331,11 +280,15 @@ class ApiService {
         return await this.request('/ai/advice', { method: 'POST', body });
     }
 
-    async finishPatientOnboarding(username, conversationHistory) {
+    async finishUserOnboarding(username, conversationHistory) {
         return await this.request(`/users/${username}/onboarding/finish`, {
             method: 'POST',
             body: { conversation_history: conversationHistory || [] },
         });
+    }
+
+    async finishPatientOnboarding(username, conversationHistory) {
+        return this.finishUserOnboarding(username, conversationHistory);
     }
 
     /** Curated PubMed PMIDs: global + optional patient_username for patient-scoped rows */
@@ -402,13 +355,6 @@ class ApiService {
         });
     }
 
-    // Generate personalized nutrition plan for a patient (username or patient_id)
-    async generateNutritionPlan(params) {
-        return await this.request('/ai/nutrition-plan', {
-            method: 'POST',
-            body: typeof params === 'string' ? { username: params } : params
-        });
-    }
 }
 
 // Create singleton instance

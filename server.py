@@ -249,13 +249,19 @@ def init_db():
     except (sqlite3.OperationalError, Exception):
         pass
     
-    run_execute(cursor, "SELECT username, patient_id FROM users WHERE role='Patient'")
+    run_execute(cursor, "SELECT username, patient_id FROM users WHERE role IN ('Patient','User')")
     all_patients = cursor.fetchall()
     for (username, existing_id) in all_patients:
         if not existing_id or (str(existing_id or '')).startswith('PAT-'):
             new_id = generate_patient_id()
             run_execute(cursor, "UPDATE users SET patient_id=? WHERE username=?", (new_id, username))
-            print(f"Generated Patient ID {new_id} for {username}")
+            print(f"Generated User ID {new_id} for {username}")
+    # Migrate legacy roles to User (doctor portal removed)
+    try:
+        run_execute(cursor, "UPDATE users SET role='User' WHERE role IN ('Patient','Doctor')")
+        print("Migrated Patient/Doctor roles to User")
+    except Exception:
+        pass
     
     run_execute(cursor, """
         CREATE TABLE IF NOT EXISTS preferences (
@@ -485,6 +491,11 @@ def init_db_pg():
             cur.execute(f"ALTER TABLE ai_chat_log ADD COLUMN IF NOT EXISTS {col} {ctype}")
         except Exception:
             pass
+    try:
+        cur.execute("UPDATE users SET role='User' WHERE role IN ('Patient','Doctor')")
+        print("Migrated Patient/Doctor roles to User (PostgreSQL)")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
     print("PostgreSQL tables initialized (shared DB for all devices)")
@@ -537,6 +548,20 @@ def health():
         "database": "postgresql" if USE_PG else "sqlite",
         "user_data_persists": USE_PG or not _sqlite_likely_ephemeral_host(),
         "ephemeral_data_warning": _sqlite_likely_ephemeral_host(),
+        "ai": {
+            "openai_configured": bool(os.environ.get("OPENAI_API_KEY")),
+            "tavily_configured": bool(os.environ.get("TAVILY_API_KEY")),
+            "open_sources_enabled": os.environ.get("AI_OPEN_SOURCES", "1").strip().lower()
+            not in ("0", "false", "no", "off"),
+            "features": [
+                "patient_onboarding_interview",
+                "religion_culture_preferences",
+                "citation_relevance_filter",
+                "ai_chat_log",
+                "thumbs_rating",
+            ],
+            "app_js_version": "5.8",
+        },
     }
     if not USE_PG:
         payload["sqlite_path"] = os.path.abspath(SQLITE_DATABASE_PATH)
@@ -902,7 +927,7 @@ def _user_onboarding_completed(username):
         if not row:
             return True
         completed, role = row[0], row[1]
-        if _norm(role or "").lower() != "patient":
+        if _norm(role or "").lower() not in ("patient", "user"):
             return True
         return bool(completed)
     except Exception as ex:
@@ -1348,7 +1373,7 @@ def feedback_submit():
             }
         ), 401
     role_l = _norm(user.get("role") or "").lower()
-    if role_l not in ("patient", "doctor", "admin"):
+    if role_l not in ("patient", "user", "doctor", "admin"):
         return jsonify({"error": "This account cannot submit feedback through this form."}), 403
     msg = (data.get("message") or "").strip()
     if len(msg) < 4:
@@ -1357,10 +1382,9 @@ def feedback_submit():
         msg = msg[:8000]
     if role_l == "admin":
         source = "admin"
-    elif role_l == "patient":
-        source = "patient"
     else:
-        source = "doctor"
+        # Legacy patient/doctor accounts map to user feedback source
+        source = "user"
     ts = int(datetime.now().timestamp() * 1000)
     conn = get_conn()
     cursor = conn.cursor()
@@ -1408,10 +1432,10 @@ def feedback_admin_list():
 
     clauses = []
     params = []
-    if filt_src in ("patient", "doctor", "admin"):
+    if filt_src in ("patient", "user", "doctor", "admin"):
         clauses.append("LOWER(TRIM(COALESCE(source,'')))=?")
         params.append(filt_src)
-    if filt_role in ("patient", "doctor", "admin"):
+    if filt_role in ("patient", "user", "doctor", "admin"):
         clauses.append("LOWER(TRIM(COALESCE(role,'')))=?")
         params.append(filt_role)
     if search:
@@ -1467,7 +1491,7 @@ def ai_chat_admin_list():
 
     clauses = []
     params = []
-    if filt_src in ("patient", "doctor"):
+    if filt_src in ("patient", "user", "doctor"):
         clauses.append("LOWER(TRIM(COALESCE(source,'')))=?")
         params.append(filt_src)
     if errors_only:
@@ -1649,7 +1673,7 @@ def login():
     if user:
         # If patient doesn't have an ID, generate one
         patient_id = user[4] or ""
-        if user[3].lower() == 'patient' and not patient_id:
+        if user[3].lower() in ('patient', 'user') and not patient_id:
             patient_id = generate_patient_id()
             run_execute(cursor,"UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
             conn.commit()
@@ -1658,11 +1682,14 @@ def login():
         conn.close()
         fb_tok = _make_feedback_token(user[0])
         onboarding_completed = _user_onboarding_completed(user[0])
+        role_out = user[3]
+        if _norm(role_out or '').lower() in ('patient', 'doctor'):
+            role_out = 'User'
         return jsonify(
             {
                 "username": user[0],
                 "name": user[2],
-                "role": user[3],
+                "role": role_out,
                 "patient_id": patient_id,
                 "age": user[5] if user[5] else None,
                 "sex": user[6] if len(user) > 6 and user[6] else "",
@@ -1684,12 +1711,13 @@ def create_user():
     username = _norm(data.get('username') or '').lower()
     password = _norm(data.get('password') or '')
     name = _norm(data.get('name') or '')
-    role = _norm(data.get('role') or 'Patient')
+    # Public sign-up is always a User account (doctor portal removed)
+    role = 'User'
     
     if not all([username, password, name]):
         return jsonify({"error": "Username, password, and name are required"}), 400
 
-    if role.lower() == "admin":
+    if _norm(data.get('role') or '').lower() == "admin":
         return jsonify(
             {
                 "error": "Admin accounts cannot be created from the public sign-up form. "
@@ -1700,19 +1728,17 @@ def create_user():
     conn = get_conn()
     cursor = conn.cursor()
     
-    # Generate patient_id for all users (patients and doctors can have one, but it's mainly for patients)
+    # Generate unique user ID (stored as patient_id for DB compatibility)
     patient_id = None
-    if role.lower() == 'patient':
-        # Keep generating until we get a unique one
-        while True:
-            new_id = generate_patient_id()
-            run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (new_id,))
-            if not cursor.fetchone():
-                patient_id = new_id
-                break
+    while True:
+        new_id = generate_patient_id()
+        run_execute(cursor,"SELECT username FROM users WHERE patient_id=?", (new_id,))
+        if not cursor.fetchone():
+            patient_id = new_id
+            break
     
     try:
-        onboarding_done = 0 if role.lower() == 'patient' else 1
+        onboarding_done = 0
         run_execute(cursor,
             "INSERT INTO users (username, password, name, role, patient_id, onboarding_completed) VALUES (?, ?, ?, ?, ?, ?)",
             (username, password, name, role, patient_id, onboarding_done)
@@ -1753,7 +1779,7 @@ def get_user(username):
         print(f"User found: True")
         
         # If patient doesn't have an ID, generate one
-        if user[2].lower() == 'patient' and not user[3]:
+        if user[2].lower() in ('patient', 'user') and not user[3]:
             print(f"Generating Patient ID for {user[0]}")
             patient_id = generate_patient_id()
             run_execute(cursor,"UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
@@ -2223,26 +2249,9 @@ def get_notes_summary_by_patient_id(patient_id):
 
 @app.route('/api/users/<username>/notes', methods=['POST'])
 def add_note(username):
-    """Add a doctor note for a user (store username in lowercase)."""
-    data = request.get_json()
-    note = data.get('note', '')
-    
-    if not note:
-        return jsonify({"error": "Note is required"}), 400
-    
-    created_at = int(datetime.now().timestamp() * 1000)  # Milliseconds since epoch
-    uname_lower = (username or "").strip().lower()
-    
-    conn = get_conn()
-    cursor = conn.cursor()
-    run_execute(cursor,
-        "INSERT INTO notes (username, note, created_at) VALUES (?, ?, ?)",
-        (uname_lower, note, created_at)
-    )
-    conn.commit()
-    conn.close()
-    print(f"[add_note] username from URL={username!r} -> stored as {uname_lower!r}")
-    return jsonify({"message": "Note added successfully"}), 201
+    """Doctor notes removed — endpoint kept only to return Gone."""
+    return jsonify({"error": "Doctor notes have been removed from this app."}), 410
+
 
 @app.route('/api/users/<username>/medical-info', methods=['GET'])
 def get_medical_info(username):
@@ -2412,37 +2421,22 @@ def update_medical_info(username):
     return jsonify({"message": "Medical information updated successfully"})
 
 # Every AI reply must include citations (prepended as first system message on every request)
-AI_CITATION_RULE_DOCTOR = """Citation rule (applies to EVERY reply, no exceptions—including brief answers, follow-ups, and clarifications):
-After your main answer, add a section with this exact heading on its own line:
-**Supporting references**
-Then 1–3 bullet points ONLY—each must directly support a specific claim in your answer above.
-
-Relevance gate (critical):
-- Read each provided source block (web search, PubMed, openFDA, literature repository) before citing. Use a source ONLY if its title/excerpt clearly relates to the user's question.
-- If a provided source is off-topic, skip it entirely. Never cite random or tangential articles to fill space.
-- If no provided source fits, do not cite them. Instead give 1 bullet naming a trusted guideline body (e.g. ADA, WHO, NHS) relevant to the topic—no invented URLs.
-
-Linking:
-- Web search: markdown [title](url) using ONLY "URL:" lines from the web search block for facts you used.
-- PubMed/repository: markdown [short title](https://pubmed.ncbi.nlm.nih.gov/PMID/) for articles you actually relied on.
-- Never invent PMIDs, DOIs, or URLs.
-
-Evidence discipline: PubMed/openFDA/web/repository excerpts are optional background—not a checklist. Ignore unrelated snippets. For calories/BMR/TDEE, derive from explicit patient metrics or label as general educational estimates."""
-
 ONBOARDING_START_TOKEN = "__ONBOARDING_START__"
 
-AI_PATIENT_ONBOARDING_PROMPT = """You are conducting a warm welcome interview for {user_name}, a new patient using Wellbeing Companion.
+AI_USER_ONBOARDING_PROMPT = """You are conducting a warm welcome interview for {user_name}, a new user of Wellbeing Companion.
 Your job is to get to know them through a short, friendly conversation—not a medical exam.
 
 Interview rules:
 - Ask ONE question at a time. Keep each reply to 2–4 short sentences.
 - Briefly acknowledge their last answer before asking the next question.
-- Over the conversation, learn about: their main wellbeing or nutrition goals; foods they enjoy; foods they avoid or dislike; food allergies; religious or cultural food practices that matter to them (e.g. halal, kosher, fasting, vegetarian traditions, cultural cuisines); their cultural background if they want to share; how active they are; anything important for their doctor or care team to know; age and sex if they are comfortable sharing.
+- Over the conversation, learn about: their main wellbeing or nutrition goals; foods they enjoy; foods they avoid or dislike; food allergies; religious or cultural food practices that matter to them (e.g. halal, kosher, fasting, vegetarian traditions, cultural cuisines); their cultural background if they want to share; how active they are; anything important for their wellbeing profile; age and sex if they are comfortable sharing.
 - Do not lecture, diagnose, or give long advice yet—focus on listening and asking.
 - When you have covered goals, likes/dislikes, religion/culture (if they wish to share), activity, and allergies (or they say they have none), give a short friendly summary of what you learned and tell them they can tap **Save intro to my profile** when ready, or keep chatting if they want to add more.
 - Never invent facts they did not share.
 
 Citation rule during this interview only: after your reply, add **Supporting references** with exactly ONE brief bullet (e.g. general NHS or WHO wellbeing guidance)—no URLs required."""
+
+AI_PATIENT_ONBOARDING_PROMPT = AI_USER_ONBOARDING_PROMPT
 
 AI_CITATION_RULE_PATIENT = """Citation rule (applies to EVERY reply, no exceptions—including short answers and follow-ups):
 After your main answer, add a section with this exact heading on its own line:
@@ -2453,14 +2447,14 @@ Relevance gate (critical):
 - Before citing any provided source (web search, PubMed, openFDA, literature repository), check that its title/excerpt clearly matches the user's question.
 - Skip off-topic sources completely. Never list random studies or links just to have references.
 - If nothing provided fits, use 1 bullet citing a well-known organization relevant to the topic (e.g. NHS, WHO, ADA)—by name only, no invented URLs.
-- If you relied mainly on this app's profile/notes, say so in one bullet.
+- If you relied mainly on this app's user profile, say so in one bullet.
 
 Linking:
 - Web: [title](url) with URLs copied exactly from the web search block.
 - PubMed: [short title](https://pubmed.ncbi.nlm.nih.gov/PMID/) only for articles you used.
 - Never fabricate links or PMIDs.
 
-Evidence discipline: Ignore unrelated PubMed/web/repository snippets. For calorie or body-composition numbers, say they are estimates unless calculated from saved profile data; encourage checking with the care team when unsure."""
+Evidence discipline: Ignore unrelated PubMed/web/repository snippets. For calorie or body-composition numbers, say they are estimates unless calculated from saved profile data; encourage checking with a qualified professional when unsure."""
 
 
 def _tavily_health_domains():
@@ -2843,8 +2837,8 @@ def finish_patient_onboarding(username):
     run_execute(cursor, "SELECT role FROM users WHERE LOWER(username)=?", (uname,))
     row = cursor.fetchone()
     conn.close()
-    if not row or _norm(row[0] or "").lower() != "patient":
-        return jsonify({"error": "Patient not found"}), 404
+    if not row or _norm(row[0] or "").lower() not in ("patient", "user"):
+        return jsonify({"error": "User not found"}), 404
 
     try:
         client = OpenAI(api_key=api_key)
@@ -2854,7 +2848,7 @@ def finish_patient_onboarding(username):
                 {
                     "role": "system",
                     "content": (
-                        "Extract structured profile data from a patient welcome interview. "
+                        "Extract structured profile data from a user welcome interview. "
                         "Reply with JSON only, no markdown, using this shape:\n"
                         '{"likes":"","dislikes":"","religion":"","culture":"",'
                         '"patient_goals":"","food_allergies":"",'
@@ -2904,17 +2898,15 @@ def get_ai_advice():
     medical_info = data.get('medical_info', {}) or {}
     conversation_history = data.get('conversation_history', [])
     image = data.get('image')  # optional: data URL (base64) for current message
-    role = data.get('role', '')  # 'doctor' = doctor assistant mode
-    patient_context = data.get('patient_context', '')  # optional summary when doctor has patient loaded
+    role = data.get('role', '')
+    patient_context = data.get('patient_context', '')
     # Patient login username: links global + patient-specific PubMed repository into AI context
     context_username = _norm(data.get('context_username') or '').lower()
     acting_username = _norm(data.get('username') or context_username or 'unknown').lower()
     role_norm = _norm(role or '').lower()
-    chat_source = 'doctor' if role_norm == 'doctor' else 'patient'
+    chat_source = 'user'
     onboarding_interview = bool(data.get('onboarding_interview'))
-    if role_norm == 'doctor':
-        onboarding_interview = False
-    elif onboarding_interview and _user_onboarding_completed(acting_username):
+    if onboarding_interview and _user_onboarding_completed(acting_username):
         onboarding_interview = False
 
     has_image_flag = bool(image and str(image).startswith('data:image'))
@@ -2936,13 +2928,7 @@ def get_ai_advice():
         return jsonify({"error": "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."}), 503
     
     try:
-        # Build context from notes (only include in system message if first message)
-        notes_context = ""
-        if notes and len(notes) > 0 and len(conversation_history) == 0:
-            recent_notes = notes[:3]  # Use most recent 3 notes
-            notes_context = "\n".join([f"- {note.get('note', '')}" for note in recent_notes])
-        
-        # Build doctor-recorded information section (non-empty fields only)
+        # Build user profile medical information section (non-empty fields only)
         med = medical_info
         med_parts = []
         if med.get('height'):
@@ -2958,7 +2944,7 @@ def get_ai_advice():
         if med.get('past_medical_history'):
             med_parts.append(f"- Past medical history: {med.get('past_medical_history', '')}")
         if med.get('patient_goals'):
-            med_parts.append(f"- Patient goals: {med.get('patient_goals', '')}")
+            med_parts.append(f"- Goals: {med.get('patient_goals', '')}")
         if med.get('food_allergies'):
             med_parts.append(f"- Food allergies: {med.get('food_allergies', '')}")
         if med.get('physical_activity'):
@@ -2975,10 +2961,7 @@ def get_ai_advice():
         
         # Citation rule on every request so follow-up messages also include references
         messages = []
-        if role == 'doctor':
-            messages.append({"role": "system", "content": AI_CITATION_RULE_DOCTOR})
-        else:
-            messages.append({"role": "system", "content": AI_CITATION_RULE_PATIENT})
+        messages.append({"role": "system", "content": AI_CITATION_RULE_PATIENT})
 
         rating_feedback = _ai_rating_feedback_system_block(acting_username)
         if rating_feedback:
@@ -2991,13 +2974,7 @@ def get_ai_advice():
                 "content": AI_PATIENT_ONBOARDING_PROMPT.format(user_name=user_name),
             })
         elif len(conversation_history) == 0:
-            if role == 'doctor':
-                system_prompt = """You are an AI assistant helping a doctor in their wellbeing practice. Be professional, concise, and accurate. You can answer questions about nutrition, patient care, general health, and wellbeing. If the doctor provides context about a loaded patient, use it to give relevant advice. Do not make up patient data. You must always follow the citation rule from the previous system message."""
-                if patient_context:
-                    system_prompt += f"\n\nCurrent patient context (if the question is about this patient):\n{patient_context}"
-                messages.append({"role": "system", "content": system_prompt})
-            else:
-                system_prompt = f"""You are a helpful Wellbeing Companion for {user_name}. 
+            system_prompt = f"""You are a helpful Wellbeing Companion for {user_name}. 
 You provide personalized advice about health, recipes, and wellbeing.
 
 User Preferences:
@@ -3009,14 +2986,11 @@ User Preferences:
 Important: When suggesting recipes, meals, or any food recommendations, you MUST respect the user's dislikes. Never recommend or suggest any food, ingredient, or meal that appears in their dislikes list. Use their likes when possible to suggest foods they enjoy.
 Respect religious and cultural practices they have shared (e.g. halal, kosher, fasting periods, vegetarian norms, traditional cuisines). Do not suggest foods or activities that conflict with their stated religion or culture. When not specified, keep suggestions inclusive.
 
-Doctor-recorded information (use this to personalize advice and avoid conflicting with care plans):
+Profile / health information (from the user's account and onboarding):
 {medical_context}
 
-Recent Doctor Notes:
-{notes_context if notes_context else 'No notes available'}
-
-Provide helpful, personalized advice that takes into account the user's preferences and medical context. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context. You must always follow the citation rule from the previous system message."""
-                messages.append({"role": "system", "content": system_prompt})
+Provide helpful, personalized advice that takes into account the user's preferences and profile. Be friendly, supportive, and informative. Remember previous parts of the conversation to maintain context. You must always follow the citation rule from the previous system message."""
+            messages.append({"role": "system", "content": system_prompt})
 
         # Curated literature repository (practice-wide + per-patient PMIDs)
         skip_search = bool(image and str(image).startswith('data:image')) or onboarding_interview
@@ -3036,7 +3010,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
                     messages.append({
                         'role': 'system',
                         'content': (
-                            'Curated PubMed articles from your literature repository (practice-wide and/or this patient). '
+                            'Curated PubMed articles from the literature repository. '
                             'These were pre-filtered for relevance to the user question—still verify each excerpt before citing. '
                             'In **Supporting references**, include markdown links only for articles you actually used.\n\n'
                             + repo_block
@@ -3262,8 +3236,6 @@ def generate_nutrition_plan():
         if med[9]: ctx_parts.append(f"Diabetes type: {med[9]}")
         if med[10]: ctx_parts.append(f"Chronic conditions: {med[10]}")
         if med[11]: ctx_parts.append(f"Activity level: {med[11]}")
-        if notes_txt:
-            ctx_parts.append("Recent doctor notes:\n" + notes_txt)
         context = "\n".join(ctx_parts)
 
         web_extra = ""

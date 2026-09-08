@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-title" content="Wellbeing">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/pwa-icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=4.7">
+    <link rel="stylesheet" href="styles.css?v=5.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -68,13 +68,6 @@
                         <label for="registerConfirmPassword">Confirm Password</label>
                         <input type="password" id="registerConfirmPassword" required>
                     </div>
-                    <div class="form-group">
-                        <label for="registerRole">Role</label>
-                        <select id="registerRole">
-                            <option value="Patient">Patient</option>
-                            <option value="Doctor">Doctor</option>
-                        </select>
-                    </div>
                     <button type="submit" class="btn btn-primary">Create Account</button>
                     <button type="button" class="btn btn-link" onclick="showScreen('loginScreen')">Back to Login</button>
                     <div id="registerError" class="error-message"></div>
@@ -83,20 +76,20 @@
         </div>
     </div>
 
-    <!-- Patient Home Screen -->
-    <div id="patientHome" class="screen">
+    <!-- User Home Screen -->
+    <div id="userHome" class="screen">
         <div class="app-header">
             <div>
-                <h2 id="patientWelcome">Welcome</h2>
-                <div id="patientIdHeader" class="patient-id-header" style="display: none;">
-                    <span class="patient-id-label">Patient ID:</span>
-                    <span id="patientIdHeaderValue" class="patient-id-number"></span>
-                    <button class="btn-copy-small" onclick="copyPatientIdFromHeader()" title="Copy ID">📋</button>
+                <h2 id="userWelcome">Welcome</h2>
+                <div id="userIdHeader" class="user-id-header" style="display: none;">
+                    <span class="user-id-label">User ID:</span>
+                    <span id="userIdHeaderValue" class="user-id-number"></span>
+                    <button class="btn-copy-small" onclick="copyUserIdFromHeader()" title="Copy ID">📋</button>
                 </div>
             </div>
             <div class="app-header-actions">
-                <button type="button" class="btn btn-secondary" onclick="showPatientTab('feedback')" title="Send feedback">Feedback</button>
-                <button type="button" class="btn btn-secondary" id="patientInstallAppBtn" onclick="installWellbeingApp()" title="Add this app to your home screen">Install</button>
+                <button type="button" class="btn btn-secondary" onclick="showUserTab('feedback')" title="Send feedback">Feedback</button>
+                <button type="button" class="btn btn-secondary" id="userInstallAppBtn" onclick="installWellbeingApp()" title="Add this app to your home screen">Install</button>
                 <button class="btn btn-icon" onclick="logout()" title="Logout">
                     <span>Logout</span>
                 </button>
@@ -104,23 +97,23 @@
         </div>
         
         <!-- Navigation Tabs -->
-        <div class="patient-nav-tabs">
-            <button class="nav-tab active" onclick="showPatientTab('main')" id="tab-main">
+        <div class="user-nav-tabs">
+            <button class="nav-tab active" onclick="showUserTab('main')" id="tab-main">
                 <span>💬</span> Main
             </button>
-            <button class="nav-tab" onclick="showPatientTab('account')" id="tab-account">
+            <button class="nav-tab" onclick="showUserTab('account')" id="tab-account">
                 <span>👤</span> Account
             </button>
-            <button class="nav-tab" onclick="showPatientTab('settings')" id="tab-settings">
+            <button class="nav-tab" onclick="showUserTab('settings')" id="tab-settings">
                 <span>⚙️</span> Settings
             </button>
-            <button class="nav-tab" onclick="showPatientTab('feedback')" id="tab-feedback">
+            <button class="nav-tab" onclick="showUserTab('feedback')" id="tab-feedback">
                 <span>✉️</span> Feedback
             </button>
         </div>
 
         <!-- Main Tab - AI Chat Only -->
-        <div id="patientTab-main" class="patient-tab-content active">
+        <div id="userTab-main" class="user-tab-content active">
             <div class="container">
                 <div class="card ai-card">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; position: relative; z-index: 2;">
@@ -130,17 +123,17 @@
                                 <span style="display: none; font-size: 1.8rem;">🤖</span>
                                 <span>AI Companion</span>
                             </h3>
-                            <p class="ai-subtitle" id="patientAiSubtitle" style="margin: 0; color: var(--text-light);">Ask me anything about your wellbeing, recipes, or health questions!</p>
+                            <p class="ai-subtitle" id="userAiSubtitle" style="margin: 0; color: var(--text-light);">Ask me anything about your wellbeing, recipes, or health questions!</p>
                         </div>
                         <div style="display: flex; gap: 8px; flex-wrap: wrap; position: relative; z-index: 10;">
-                            <button type="button" class="btn btn-link" id="patientAiPrintBtn" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color); display: none;">Print</button>
+                            <button type="button" class="btn btn-link" id="userAiPrintBtn" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color); display: none;">Print</button>
                             <button type="button" class="btn btn-link" onclick="clearConversation()" style="font-size: 0.85rem; padding: 8px 16px; border-radius: 8px; background: rgba(99, 102, 241, 0.1); color: var(--primary-color);">Clear Chat</button>
                         </div>
                     </div>
-                    <div id="patientOnboardingBanner" class="patient-onboarding-banner" style="display: none;">
+                    <div id="userOnboardingBanner" class="user-onboarding-banner" style="display: none;">
                         <p style="margin: 0 0 10px 0;"><strong>Welcome!</strong> I'm going to ask a few quick questions to personalize your advice.</p>
                         <p style="margin: 0 0 12px 0; font-size: 0.9rem; color: var(--text-light);">Answer in the chat below — including goals, food preferences, religion, and culture if you'd like. When you're done, save what we discussed to your profile.</p>
-                        <button type="button" class="btn btn-secondary" id="patientOnboardingFinishBtn">Save intro to my profile</button>
+                        <button type="button" class="btn btn-secondary" id="userOnboardingFinishBtn">Save intro to my profile</button>
                     </div>
                     <form id="aiForm" style="position: relative; z-index: 2;">
                         <div class="form-group" style="position: relative; z-index: 2;">
@@ -163,43 +156,34 @@
         </div>
 
         <!-- Account Tab -->
-        <div id="patientTab-account" class="patient-tab-content">
+        <div id="userTab-account" class="user-tab-content">
             <div class="container">
-                <!-- Patient ID Display -->
+                <!-- User ID Display -->
                 <div class="card">
-                    <h3>Your Patient ID</h3>
-                    <div id="patientIdDisplayAccount">
-                        <div class="patient-id-box">
-                            <strong>Your Patient ID:</strong>
-                            <span class="patient-id-value" id="patientIdValueAccount">Loading...</span>
-                            <button class="btn-copy-id" onclick="copyPatientIdAccount()" title="Copy to clipboard">
+                    <h3>Your User ID</h3>
+                    <div id="userIdDisplayAccount">
+                        <div class="user-id-box">
+                            <strong>Your User ID:</strong>
+                            <span class="user-id-value" id="userIdValueAccount">Loading...</span>
+                            <button class="btn-copy-id" onclick="copyUserIdAccount()" title="Copy to clipboard">
                                 📋 Copy
                             </button>
                         </div>
-                        <div class="patient-id-note">Share this ID with your doctor to link your account</div>
-                    </div>
-                </div>
-
-                <!-- Summary of all doctor's inputs for the patient -->
-                <div class="card">
-                    <h3>Summary of your doctor's inputs</h3>
-                    <p class="summary-intro" style="color: var(--text-light); margin-bottom: 1rem; font-size: 0.95rem;">Everything your doctor has recorded for you (medical info, preferences, and notes) appears below.</p>
-                    <div id="patientNotes">
-                        <div class="loading">Loading...</div>
+                        <div class="user-id-note">Your unique account ID</div>
                     </div>
                 </div>
 
                 <!-- Personal Information -->
                 <div class="card">
                     <h3>Personal Information</h3>
-                    <form id="patientAccountForm">
+                    <form id="userAccountForm">
                         <div class="form-group">
-                            <label for="patientName">Full Name</label>
-                            <input type="text" id="patientName" required>
+                            <label for="userName">Full Name</label>
+                            <input type="text" id="userName" required>
                         </div>
                         <div class="form-group">
-                            <label for="patientAge">Age</label>
-                            <input type="number" id="patientAge" min="1" max="120" placeholder="Enter your age">
+                            <label for="userAge">Age</label>
+                            <input type="number" id="userAge" min="1" max="120" placeholder="Enter your age">
                         </div>
                         <button type="submit" class="btn btn-primary">Save Information</button>
                     </form>
@@ -208,22 +192,22 @@
                 <!-- Preferences -->
                 <div class="card">
                     <h3>Your Preferences</h3>
-                    <form id="patientPrefsForm">
+                    <form id="userPrefsForm">
                         <div class="form-group">
-                            <label for="patientLikes">Likes (comma or line separated)</label>
-                            <textarea id="patientLikes" rows="3" placeholder="e.g., Chocolate, Reading, Swimming"></textarea>
+                            <label for="userLikes">Likes (comma or line separated)</label>
+                            <textarea id="userLikes" rows="3" placeholder="e.g., Chocolate, Reading, Swimming"></textarea>
                         </div>
                         <div class="form-group">
-                            <label for="patientDislikes">Dislikes (comma or line separated)</label>
-                            <textarea id="patientDislikes" rows="3" placeholder="e.g., Spicy food, Loud noises"></textarea>
+                            <label for="userDislikes">Dislikes (comma or line separated)</label>
+                            <textarea id="userDislikes" rows="3" placeholder="e.g., Spicy food, Loud noises"></textarea>
                         </div>
                         <div class="form-group">
-                            <label for="patientReligion">Religion / faith practices (optional)</label>
-                            <textarea id="patientReligion" rows="2" placeholder="e.g., Muslim — halal; Jewish — kosher; Hindu vegetarian; fasting during Ramadan"></textarea>
+                            <label for="userReligion">Religion / faith practices (optional)</label>
+                            <textarea id="userReligion" rows="2" placeholder="e.g., Muslim — halal; Jewish — kosher; Hindu vegetarian; fasting during Ramadan"></textarea>
                         </div>
                         <div class="form-group">
-                            <label for="patientCulture">Cultural background (optional)</label>
-                            <textarea id="patientCulture" rows="2" placeholder="e.g., Caribbean heritage; prefer traditional West African dishes"></textarea>
+                            <label for="userCulture">Cultural background (optional)</label>
+                            <textarea id="userCulture" rows="2" placeholder="e.g., Caribbean heritage; prefer traditional West African dishes"></textarea>
                         </div>
                         <button type="submit" class="btn btn-primary">Save Preferences</button>
                     </form>
@@ -232,7 +216,7 @@
         </div>
 
         <!-- Settings Tab -->
-        <div id="patientTab-settings" class="patient-tab-content">
+        <div id="userTab-settings" class="user-tab-content">
             <div class="container">
                 <div class="card">
                     <h3>Settings</h3>
@@ -242,269 +226,18 @@
         </div>
 
         <!-- Feedback Tab -->
-        <div id="patientTab-feedback" class="patient-tab-content">
+        <div id="userTab-feedback" class="user-tab-content">
             <div class="container">
                 <div class="card">
                     <h3>Send feedback</h3>
-                    <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions, bugs, or ideas for your doctor or the app team. Submitted under your logged-in account.</p>
+                    <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions, bugs, or ideas for the app team. Submitted under your logged-in account.</p>
                     <div class="form-group">
-                        <label for="patientFeedbackMessage">Message</label>
-                        <textarea id="patientFeedbackMessage" rows="5" placeholder="Type your feedback here..." maxlength="8000"></textarea>
+                        <label for="userFeedbackMessage">Message</label>
+                        <textarea id="userFeedbackMessage" rows="5" placeholder="Type your feedback here..." maxlength="8000"></textarea>
                     </div>
-                    <button type="button" class="btn btn-primary" onclick="submitPatientFeedback()">Submit feedback</button>
-                    <p id="patientFeedbackStatus" class="feedback-status-line" style="margin-top: 12px; font-size: 0.9rem;" role="status"></p>
+                    <button type="button" class="btn btn-primary" onclick="submitUserFeedback()">Submit feedback</button>
+                    <p id="userFeedbackStatus" class="feedback-status-line" style="margin-top: 12px; font-size: 0.9rem;" role="status"></p>
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Doctor Home Screen -->
-    <div id="doctorHome" class="screen">
-        <div class="app-header">
-            <h2 id="doctorWelcome">Doctor</h2>
-            <div class="app-header-actions">
-                <button type="button" class="btn btn-secondary" onclick="document.getElementById('doctorFeedbackCard').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Go to feedback form">Feedback</button>
-                <button type="button" class="btn btn-secondary" id="doctorInstallAppBtn" onclick="installWellbeingApp()" title="Add this app to your home screen">Install</button>
-                <button class="btn btn-icon" onclick="logout()" title="Logout">
-                    <span>Logout</span>
-                </button>
-            </div>
-        </div>
-        <div class="container">
-            <!-- Patient sign-up QR: scan to open registration on phone -->
-            <div class="card" id="doctorPatientSignupCard">
-                <h3>Patient sign-up</h3>
-                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Patients can scan this QR code to open the app and create their account.</p>
-                <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-                    <div id="doctorQRCodeContainer" style="flex-shrink: 0; min-width: 200px; min-height: 200px; background: #fff; border-radius: 8px; padding: 8px; border: 1px solid #e0e0e0;"></div>
-                    <div style="flex: 1; min-width: 200px;">
-                        <p style="margin: 0 0 8px 0; font-size: 0.95rem;">Scan with your phone camera to open the sign-up page.</p>
-                        <p style="margin: 0; font-size: 0.85rem; color: var(--text-light);" id="doctorQRCodeUrl"></p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="form-group">
-                    <label for="doctorPatientSelect">Select patient</label>
-                    <select id="doctorPatientSelect" class="form-control" style="max-width: 100%; margin-bottom: 10px;" onchange="onDoctorPatientSelectChange()">
-                        <option value="">— Select a patient —</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="doctorPatientUsername">Or enter Patient Username / Patient ID</label>
-                    <div class="input-group">
-                        <input type="text" id="doctorPatientUsername" placeholder="Enter username or 6-digit Patient ID">
-                        <button type="button" class="btn btn-primary" onclick="loadPatient()">Load Patient</button>
-                    </div>
-                    <small style="color: var(--text-light); font-size: 0.85rem;">Choose from the dropdown above or type username / 6-digit Patient ID</small>
-                </div>
-            </div>
-
-            <div class="card" id="doctorLiteratureCard">
-                <h3>Literature repository (PubMed)</h3>
-                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Add PMIDs from <a href="https://pubmed.ncbi.nlm.nih.gov/" target="_blank" rel="noopener noreferrer">PubMed</a>. Practice-wide articles apply to every chat; patient-specific ones apply when that patient is loaded (doctor AI) or when they use the patient app (their login).</p>
-                <div class="form-row" style="flex-wrap: wrap; align-items: flex-end; gap: 12px;">
-                    <div class="form-group" style="flex: 1; min-width: 140px;">
-                        <label for="litGlobalPmid">PMID (practice-wide)</label>
-                        <input type="text" id="litGlobalPmid" class="form-control" placeholder="e.g. 28770321" inputmode="numeric">
-                    </div>
-                    <button type="button" class="btn btn-primary" onclick="addGlobalLiterature()">Add practice-wide</button>
-                </div>
-                <div id="litGlobalList" class="lit-list" style="margin-top: 12px;"></div>
-                <hr style="margin: 16px 0; border: none; border-top: 1px solid var(--border-color);">
-                <p style="font-size: 0.9rem; color: var(--text-light); margin-bottom: 8px;">Patient-specific (optional)</p>
-                <div class="form-row" style="flex-wrap: wrap; align-items: flex-end; gap: 12px;">
-                    <div class="form-group" style="flex: 1; min-width: 140px;">
-                        <label for="litPatientPmid">PMID for loaded patient</label>
-                        <input type="text" id="litPatientPmid" class="form-control" placeholder="PubMed ID" inputmode="numeric">
-                    </div>
-                    <button type="button" class="btn btn-secondary" onclick="addPatientLiterature()">Add for loaded patient</button>
-                </div>
-                <div id="litPatientList" class="lit-list" style="margin-top: 12px;"></div>
-            </div>
-
-            <!-- Doctor AI Assistant -->
-            <div class="card">
-                <h3>AI Assistant</h3>
-                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Ask questions about nutrition, patient care, or wellbeing. If a patient is loaded, the AI can use their context.</p>
-                <div class="form-group">
-                    <label for="doctorAIQuestion">Question</label>
-                    <textarea id="doctorAIQuestion" rows="2" placeholder="e.g. What foods should I recommend for someone with diabetes?"></textarea>
-                </div>
-                <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-                    <button type="button" class="btn btn-primary" id="doctorAISendBtn">Send</button>
-                    <button type="button" class="btn btn-secondary" id="doctorAiPrintBtn" style="display: none;">Print recommendations</button>
-                </div>
-                <div id="doctorAIResponse" class="ai-response" style="margin-top: 16px; min-height: 80px; padding: 12px; background: #f8f9fa; border-radius: 8px; white-space: pre-wrap; line-height: 1.6;"></div>
-            </div>
-
-            <!-- Personalized Nutrition Plan (always visible; load a patient then click Generate) -->
-            <div class="card no-print">
-                <h3>Personalized Nutrition Plan</h3>
-                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Load a patient below, then click &quot;Generate with AI&quot; to create a plan from their recorded info.</p>
-                <div class="form-group">
-                    <button type="button" class="btn btn-primary" id="doctorGeneratePlanBtn">Generate with AI</button>
-                    <button type="button" class="btn btn-primary" id="doctorNutritionPlanPrintBtn" style="margin-left: 8px; display: none;">Print Plan</button>
-                </div>
-                <div id="doctorNutritionPlanFormatted" class="nutrition-plan-print" style="margin-top: 16px; display: none;"></div>
-                <textarea id="doctorNutritionPlan" rows="6" placeholder="Load a patient, then click Generate with AI. Plan will appear above." style="white-space: pre-wrap; margin-top: 12px; display: none;"></textarea>
-            </div>
-
-            <div id="doctorPatientInfo" style="display: none;">
-                <!-- Basic Patient Information -->
-                <div class="card">
-                    <h3>Basic Patient Information</h3>
-                    <div id="patientInfoContent"></div>
-                    <form id="doctorUpdatePatientForm">
-                        <div class="form-group">
-                            <label for="doctorPatientName">Full Name</label>
-                            <input type="text" id="doctorPatientName" required>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="doctorPatientAge">Age</label>
-                                <input type="number" id="doctorPatientAge" min="1" max="120">
-                            </div>
-                            <div class="form-group">
-                                <label for="doctorPatientSex">Sex</label>
-                                <select id="doctorPatientSex">
-                                    <option value="">Select...</option>
-                                    <option value="Male">Male</option>
-                                    <option value="Female">Female</option>
-                                    <option value="Other">Other</option>
-                                    <option value="Prefer not to say">Prefer not to say</option>
-                                </select>
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Update Basic Info</button>
-                    </form>
-                </div>
-
-                <!-- Biometric Data -->
-                <div class="card">
-                    <h3>Biometric Data</h3>
-                    <form id="doctorBiometricForm">
-                        <div class="form-group">
-                            <label>Height</label>
-                            <div class="form-row" style="align-items: flex-end;">
-                                <div class="form-group" style="flex: 0 0 auto; width: 5rem;">
-                                    <label for="doctorPatientHeightFeet" style="font-size: 0.85rem; color: var(--text-light);">Feet</label>
-                                    <input type="number" id="doctorPatientHeightFeet" min="2" max="8" step="1" placeholder="ft">
-                                </div>
-                                <div class="form-group" style="flex: 0 0 auto; width: 5rem;">
-                                    <label for="doctorPatientHeightInches" style="font-size: 0.85rem; color: var(--text-light);">Inches</label>
-                                    <input type="number" id="doctorPatientHeightInches" min="0" max="11" step="0.5" placeholder="in">
-                                </div>
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label for="doctorPatientWeight">Weight</label>
-                            <input type="text" id="doctorPatientWeight" placeholder="e.g., 150 lbs or 68 kg">
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save Biometric Data</button>
-                    </form>
-                </div>
-
-                <!-- BMI & BMR Calculator (Mifflin-St Jeor) -->
-                <div class="card">
-                    <h3>BMI & BMR Calculator</h3>
-                    <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Uses height and weight for BMI; BMR from Mifflin-St Jeor equation (age, sex, height, weight).</p>
-                    <button type="button" class="btn btn-primary" id="doctorBMICalculateBtn">Calculate</button>
-                    <div id="doctorBMIResult" style="margin-top: 16px; padding: 16px; background: #f8f9fa; border-radius: 8px; min-height: 80px;"></div>
-                </div>
-
-                <!-- Medical History -->
-                <div class="card">
-                    <h3>Past Medical History</h3>
-                    <form id="doctorMedicalHistoryForm">
-                        <div class="form-group">
-                            <label for="doctorPastMedicalHistory">Medical History</label>
-                            <textarea id="doctorPastMedicalHistory" rows="4" placeholder="Enter past medical conditions, surgeries, diagnoses, etc."></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save Medical History</button>
-                    </form>
-                </div>
-
-                <!-- Patient Goals -->
-                <div class="card">
-                    <h3>Patient Goals</h3>
-                    <form id="doctorPatientGoalsForm">
-                        <div class="form-group">
-                            <label for="doctorPatientGoals">Goals</label>
-                            <textarea id="doctorPatientGoals" rows="4" placeholder="Enter patient's health and wellness goals"></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save Goals</button>
-                    </form>
-                </div>
-
-                <!-- Food Allergies -->
-                <div class="card">
-                    <h3>Food Allergies</h3>
-                    <form id="doctorFoodAllergiesForm">
-                        <div class="form-group">
-                            <label for="doctorFoodAllergies">Allergies</label>
-                            <textarea id="doctorFoodAllergies" rows="3" placeholder="List all food allergies and sensitivities"></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save Allergies</button>
-                    </form>
-                </div>
-
-                <!-- Physical Activity -->
-                <div class="card">
-                    <h3>Physical Activity</h3>
-                    <form id="doctorPhysicalActivityForm">
-                        <div class="form-group">
-                            <label for="doctorPhysicalActivity">Activity Level & Exercise</label>
-                            <textarea id="doctorPhysicalActivity" rows="3" placeholder="Describe patient's physical activity level, exercise routine, etc."></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save Activity Info</button>
-                    </form>
-                </div>
-
-                <!-- Current Medications -->
-                <div class="card">
-                    <h3>Current Medications</h3>
-                    <form id="doctorMedicationsForm">
-                        <div class="form-group">
-                            <label for="doctorCurrentMedications">Medications</label>
-                            <textarea id="doctorCurrentMedications" rows="4" placeholder="List current medications, dosages, and frequency"></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Save Medications</button>
-                    </form>
-                </div>
-
-                <div class="card collapsible-card">
-                    <div class="collapsible-header" onclick="toggleCollapsible('doctor-notes')">
-                        <h3>Doctor Notes</h3>
-                        <span class="toggle-icon" id="doctor-notes-icon">▼</span>
-                    </div>
-                    <div class="collapsible-content" id="doctor-notes-content" style="display: none;">
-                        <div id="doctorNotesList"></div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h3>Add Note</h3>
-                    <form id="doctorAddNoteForm">
-                        <div class="form-group">
-                            <label for="doctorNoteText">Note</label>
-                            <textarea id="doctorNoteText" rows="3" required></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Add Note</button>
-                    </form>
-                </div>
-            </div>
-
-            <div class="card doctor-feedback-card" id="doctorFeedbackCard">
-                <h3>Send feedback</h3>
-                <p style="color: var(--text-light); font-size: 0.9rem; margin-bottom: 12px;">Suggestions or issues about the practice app. Submitted under your logged-in doctor account.</p>
-                <div class="form-group">
-                    <label for="doctorFeedbackMessage">Message</label>
-                    <textarea id="doctorFeedbackMessage" rows="4" placeholder="Type your feedback here..." maxlength="8000"></textarea>
-                </div>
-                <button type="button" class="btn btn-primary" onclick="submitDoctorFeedback()">Submit feedback</button>
-                <p id="doctorFeedbackStatus" class="feedback-status-line" style="margin-top: 12px; font-size: 0.9rem;" role="status"></p>
             </div>
         </div>
     </div>
@@ -519,9 +252,8 @@
         <button onclick="document.getElementById('debugPanel').style.display='none'" style="margin-top: 5px; padding: 5px;">Close</button>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script src="api-service.js?v=4.3"></script>
-    <script src="app.js?v=5.8"></script>
+    <script src="api-service.js?v=5.0"></script>
+    <script src="app.js?v=6.0"></script>
     <script>
         // Show which site we're on (so tablet users can confirm same URL as desktop)
         (function () {
@@ -529,15 +261,15 @@
             if (h) h.textContent = 'You\'re on: ' + (window.location.hostname || window.location.host || '');
         })();
         console.log('Page loaded - Version 4.0');
-        console.log('Checking for patient tabs...');
-        const tabsEl = document.querySelector('.patient-nav-tabs');
-        const tabContentEls = document.querySelectorAll('.patient-tab-content');
-        console.log('Patient nav tabs found:', tabsEl ? 'YES ✓' : 'NO ✗');
-        console.log('Patient tab content elements found:', tabContentEls.length);
+        console.log('Checking for user tabs...');
+        const tabsEl = document.querySelector('.user-nav-tabs');
+        const tabContentEls = document.querySelectorAll('.user-tab-content');
+        console.log('User nav tabs found:', tabsEl ? 'YES ✓' : 'NO ✗');
+        console.log('User tab content elements found:', tabContentEls.length);
         if (tabsEl) {
             console.log('Tab buttons:', tabsEl.querySelectorAll('.nav-tab').length);
         }
-        console.log('Navigation tabs should be visible for Patient accounts');
+        console.log('Navigation tabs should be visible for user accounts');
     </script>
     <script>
         // Debug helper - press Ctrl+D to toggle

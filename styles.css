@@ -81,13 +81,6 @@ body {
     white-space: nowrap;
 }
 
-/* Doctor: feedback is last in document flow; extra separation above the card */
-.doctor-feedback-card {
-    margin-top: 32px;
-    border-top: 1px solid var(--border-color);
-    padding-top: 8px;
-}
-
 .app-header {
     background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
     padding: 18px 24px;
@@ -103,6 +96,7 @@ body {
 }
 
 /* Patient Navigation Tabs */
+.user-nav-tabs,
 .patient-nav-tabs {
     display: flex;
     background: white;
@@ -149,11 +143,13 @@ body {
 }
 
 /* Patient Tab Content */
+.user-tab-content,
 .patient-tab-content {
     display: none;
     animation: fadeIn 0.3s ease;
 }
 
+.user-tab-content.active,
 .patient-tab-content.active {
     display: block;
 }
@@ -169,6 +165,8 @@ body {
     margin: 0;
 }
 
+.user-id-header,
+.user-id-header,
 .patient-id-header {
     display: flex;
     align-items: center;
@@ -181,12 +179,16 @@ body {
     width: fit-content;
 }
 
+.user-id-label,
+.user-id-label,
 .patient-id-label {
     font-size: 0.85rem;
     color: var(--text-light);
     font-weight: 500;
 }
 
+.user-id-number,
+.user-id-number,
 .patient-id-number {
     font-family: 'Courier New', monospace;
     font-size: 1rem;
@@ -677,12 +679,14 @@ body {
 }
 
 /* Patient ID Display */
+.user-id-display,
 .patient-id-display {
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid var(--border-color);
 }
 
+.user-id-box,
 .patient-id-box {
     display: flex;
     align-items: center;
@@ -694,11 +698,13 @@ body {
     flex-wrap: wrap;
 }
 
+.user-id-box strong,
 .patient-id-box strong {
     color: var(--text-color);
     font-size: 0.9rem;
 }
 
+.user-id-value,
 .patient-id-value {
     font-family: 'Courier New', monospace;
     font-size: 1.1rem;
@@ -729,6 +735,7 @@ body {
     box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
 }
 
+.user-id-note,
 .patient-id-note {
     margin-top: 8px;
     font-size: 0.85rem;
@@ -852,6 +859,7 @@ body {
     }
     
     /* Patient ID Display - Mobile */
+    .user-id-box,
     .patient-id-box {
         flex-direction: column;
         align-items: stretch;
@@ -862,11 +870,13 @@ body {
         width: 100%;
     }
     
+    .user-id-value,
     .patient-id-value {
         text-align: center;
     }
     
     /* Navigation Tabs - Mobile */
+    .user-nav-tabs,
     .patient-nav-tabs {
         top: 61px;
     }
@@ -985,6 +995,7 @@ body {
     font-size: 0.95rem;
 }
 
+.user-onboarding-banner,
 .patient-onboarding-banner {
     margin: 0 0 16px 0;
     padding: 14px 16px;

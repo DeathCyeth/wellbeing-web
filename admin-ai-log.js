@@ -63,7 +63,7 @@
                 if (row.rating === 1) ratingBadge = ' · <span title="Thumbs up">👍</span>';
                 else if (row.rating === -1) ratingBadge = ' · <span title="Thumbs down">👎</span>';
                 const ctx = row.context_username && row.context_username !== row.username
-                    ? ' · patient context: <strong>' + escapeHtml(row.context_username) + '</strong>'
+                    ? ' · user context: <strong>' + escapeHtml(row.context_username) + '</strong>'
                     : '';
                 const refs = row.references_count ? ' · ' + row.references_count + ' PubMed ref(s)' : '';
                 const model = row.model ? ' · ' + escapeHtml(row.model) : '';

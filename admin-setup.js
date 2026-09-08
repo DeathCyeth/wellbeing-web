@@ -50,7 +50,7 @@
             }
             if (!c.feedback_admin_usernames_configured) {
                 parts.push(
-                    'Tip: add <code>FEEDBACK_ADMIN_USERNAMES</code> (comma-separated doctor usernames) so those accounts can open the feedback inbox without an Admin role.'
+                    'Tip: add <code>FEEDBACK_ADMIN_USERNAMES</code> (comma-separated usernames) so those accounts can open the feedback inbox without an Admin role.'
                 );
             }
             if (parts.length) {
