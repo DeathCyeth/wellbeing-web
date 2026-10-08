@@ -100,6 +100,7 @@ If you prefer SQLite, attach a **persistent disk** on Render, mount it at **`/da
 Without a persistent path, SQLite stays on ephemeral storage and is wiped on redeploy.
 
 - **Health check:** `GET /api/health` returns `database` (`sqlite` or `postgresql`) and, for SQLite, `sqlite_path` so you can confirm where the file lives in logs.
+- **Sign-in codes (email or text):** After the password, each person gets a 6-digit code by **one** channel. Email reuses the feedback mail settings: `FEEDBACK_SMTP_HOST`, `FEEDBACK_SMTP_PORT`, `FEEDBACK_SMTP_USER`, `FEEDBACK_SMTP_PASSWORD`, and `FEEDBACK_EMAIL_FROM`. Text uses Twilio: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER`. Set at least one of those. Do not set `TWO_FACTOR_DEV_ECHO` on Render.
 - **AI features:** If you use the in-app AI, set `OPENAI_API_KEY` in the environment (e.g. in Render’s Environment tab). If it’s not set, the rest of the app still works; only AI endpoints will return an error.
 - **Open clinical data (PubMed + openFDA):** The advice endpoint can pull free, public literature and U.S. drug label excerpts (similar in spirit to clinician tools that ground answers in references). No API key is required. Optional env vars:
   - `NCBI_EMAIL` — recommended by [NCBI E-utilities](https://www.ncbi.nlm.nih.gov/home/develop/api/) (any contact email for your app).

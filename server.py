@@ -21,6 +21,8 @@ import hmac
 import hashlib
 import urllib.request
 import urllib.error
+import urllib.parse
+import base64
 import smtplib
 import ssl
 import threading
@@ -248,6 +250,8 @@ def init_db():
         run_execute(cursor, "ALTER TABLE users ADD COLUMN onboarding_completed INTEGER DEFAULT 1")
     except (sqlite3.OperationalError, Exception):
         pass
+    _ensure_two_factor_schema(cursor, postgres=False)
+    _ensure_food_log_schema(cursor, postgres=False)
     
     run_execute(cursor, "SELECT username, patient_id FROM users WHERE role IN ('Patient','User')")
     all_patients = cursor.fetchall()
@@ -409,6 +413,8 @@ def init_db_pg():
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed INTEGER DEFAULT 1")
     except Exception:
         pass
+    _ensure_two_factor_schema(cur, postgres=True)
+    _ensure_food_log_schema(cur, postgres=True)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS preferences (
             username VARCHAR(255) PRIMARY KEY REFERENCES users(username),
@@ -1615,8 +1621,9 @@ def admin_bootstrap_create():
     name = _norm(data.get("name") or "")
     if not all([username, password, name]):
         return jsonify({"error": "Username, password, and name are required."}), 400
-    if len(password) < 8:
-        return jsonify({"error": "Password must be at least 8 characters."}), 400
+    password_error = _password_policy_error(password)
+    if password_error:
+        return jsonify({"error": password_error}), 400
     role = "Admin"
     conn = get_conn()
     cursor = conn.cursor()
@@ -1649,60 +1656,550 @@ def admin_bootstrap_create():
         raise
 
 
+PASSWORD_RULES_TEXT = (
+    "Use at least 8 characters with an uppercase letter, a lowercase letter, a number, and a symbol."
+)
+TWO_FACTOR_CODE_TTL_SEC = 10 * 60
+TWO_FACTOR_SETUP_TTL_SEC = 15 * 60
+TWO_FACTOR_MAX_ATTEMPTS = 5
+TWO_FACTOR_RESEND_COOLDOWN_SEC = 30
+
+
+def _ensure_food_log_schema(cursor, postgres=False):
+    """One saved food log per user per day, stored in the dietitian log shape."""
+    if postgres:
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS food_logs (
+                log_id VARCHAR(80) PRIMARY KEY,
+                username VARCHAR(255) NOT NULL,
+                log_date VARCHAR(10) NOT NULL,
+                payload TEXT NOT NULL,
+                updated_at BIGINT NOT NULL,
+                UNIQUE (username, log_date)
+            )
+            """
+        )
+        return
+    run_execute(
+        cursor,
+        """
+        CREATE TABLE IF NOT EXISTS food_logs (
+            log_id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            log_date TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE (username, log_date)
+        )
+        """,
+    )
+
+
+def _ensure_two_factor_schema(cursor, postgres=False):
+    """Add sign-in code columns and the short-lived challenge table."""
+    if postgres:
+        for col in ("two_factor_method", "two_factor_destination"):
+            try:
+                cursor.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} TEXT")
+            except Exception:
+                pass
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS two_factor_challenges (
+                id VARCHAR(80) PRIMARY KEY,
+                username VARCHAR(255) NOT NULL,
+                purpose VARCHAR(16) NOT NULL,
+                method VARCHAR(16) NOT NULL,
+                destination TEXT NOT NULL,
+                code_hash VARCHAR(128) NOT NULL,
+                expires_at BIGINT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                created_at BIGINT NOT NULL
+            )
+            """
+        )
+        return
+    for col in ("two_factor_method", "two_factor_destination"):
+        try:
+            run_execute(cursor, f"ALTER TABLE users ADD COLUMN {col} TEXT")
+        except Exception:
+            pass
+    run_execute(
+        cursor,
+        """
+        CREATE TABLE IF NOT EXISTS two_factor_challenges (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            method TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at INTEGER NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        )
+        """,
+    )
+
+
+def _password_policy_error(password):
+    """Return a user-facing error when a new password is too weak, else None."""
+    pwd = password or ""
+    if (
+        len(pwd) < 8
+        or not re.search(r"[A-Z]", pwd)
+        or not re.search(r"[a-z]", pwd)
+        or not re.search(r"\d", pwd)
+        or not re.search(r"[^A-Za-z0-9]", pwd)
+    ):
+        return PASSWORD_RULES_TEXT
+    return None
+
+
+def _two_factor_email_ready():
+    _, host, user, password, _, from_addr, _, _ = _feedback_email_settings()
+    if not host or not from_addr:
+        return False
+    if _feedback_smtp_no_auth():
+        return True
+    return bool(user and password)
+
+
+def _two_factor_sms_ready():
+    sid = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
+    token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+    from_num = (os.environ.get("TWILIO_FROM_NUMBER") or "").strip()
+    return bool(sid and token and from_num)
+
+
+def _two_factor_dev_echo():
+    return (os.environ.get("TWO_FACTOR_DEV_ECHO") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _two_factor_enforced():
+    """Require a code only when email or text can actually send one."""
+    return _two_factor_email_ready() or _two_factor_sms_ready() or _two_factor_dev_echo()
+
+
+def _two_factor_channel_error(method):
+    if method == "email" and not _two_factor_email_ready():
+        return (
+            "Email codes are not set up on the server yet. "
+            "Add the FEEDBACK_SMTP_HOST, FEEDBACK_SMTP_USER, FEEDBACK_SMTP_PASSWORD, "
+            "and FEEDBACK_EMAIL_FROM settings, or choose a text message instead."
+        )
+    if method == "sms" and not _two_factor_sms_ready():
+        return (
+            "Text codes are not set up on the server yet. "
+            "Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER, "
+            "or choose email instead."
+        )
+    return None
+
+
+def _normalize_two_factor_email(raw):
+    email = _norm(raw or "").lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return None
+    return email
+
+
+def _normalize_two_factor_phone(raw):
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) == 10:
+        digits = "1" + digits
+    if len(digits) < 11 or len(digits) > 15:
+        return None
+    return "+" + digits
+
+
+def _mask_two_factor_destination(method, destination):
+    if method == "email":
+        local, _, domain = (destination or "").partition("@")
+        if not domain:
+            return "your email"
+        shown = (local[:1] + "***") if local else "***"
+        return f"{shown}@{domain}"
+    digits = re.sub(r"\D", "", destination or "")
+    if len(digits) >= 4:
+        return f"a text ending in {digits[-4:]}"
+    return "your phone"
+
+
+def _hash_two_factor_code(challenge_id, code):
+    msg = f"{challenge_id}:{code}".encode("utf-8")
+    return hmac.new(_feedback_signing_key_bytes(), msg, hashlib.sha256).hexdigest()
+
+
+def _make_setup_token(username):
+    uname = _norm(username or "").lower()
+    exp = int(datetime.now().timestamp()) + TWO_FACTOR_SETUP_TTL_SEC
+    msg = f"setup|{uname}|{exp}".encode("utf-8")
+    sig = hmac.new(_feedback_signing_key_bytes(), msg, hashlib.sha256).hexdigest()
+    return f"{exp}.{sig}"
+
+
+def _verify_setup_token(username, token):
+    uname = _norm(username or "").lower()
+    if not uname or not token:
+        return False
+    try:
+        exp_s, sig = str(token).strip().split(".", 1)
+        exp = int(exp_s)
+        if exp < int(datetime.now().timestamp()):
+            return False
+        msg = f"setup|{uname}|{exp}".encode("utf-8")
+        expected = hmac.new(_feedback_signing_key_bytes(), msg, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, sig)
+    except Exception:
+        return False
+
+
+def _parse_two_factor_contact(data):
+    method = _norm(data.get("method") or data.get("two_factor_method") or "").lower()
+    if method not in ("email", "sms"):
+        return None, None, "Choose email or a text message for your sign-in code."
+    if method == "email":
+        destination = _normalize_two_factor_email(data.get("email") or data.get("destination") or "")
+        if not destination:
+            return None, None, "Enter a valid email address."
+    else:
+        destination = _normalize_two_factor_phone(data.get("phone") or data.get("destination") or "")
+        if not destination:
+            return None, None, "Enter a valid mobile number, including area code."
+    return method, destination, None
+
+
+def _send_two_factor_email(to_addr, code):
+    _, _, _, _, _, from_addr, _, _ = _feedback_email_settings()
+    msg = EmailMessage()
+    msg["Subject"] = "Your Wellbeing Companion sign-in code"
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg.set_content(
+        f"Your Wellbeing Companion sign-in code is {code}.\n\n"
+        "It expires in 10 minutes. If you did not try to sign in, you can ignore this email."
+    )
+    _smtp_deliver_message(msg)
+
+
+def _send_two_factor_sms(to_number, code):
+    sid = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
+    token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+    from_num = (os.environ.get("TWILIO_FROM_NUMBER") or "").strip()
+    if not (sid and token and from_num):
+        raise RuntimeError("Text codes are not set up on the server yet.")
+    body = urllib.parse.urlencode(
+        {
+            "To": to_number,
+            "From": from_num,
+            "Body": f"Your Wellbeing Companion code is {code}. It expires in 10 minutes.",
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.twilio.com/2010-04-01/Accounts/{urllib.parse.quote(sid)}/Messages.json",
+        data=body,
+        method="POST",
+    )
+    cred = base64.b64encode(f"{sid}:{token}".encode("utf-8")).decode("ascii")
+    req.add_header("Authorization", f"Basic {cred}")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            resp.read(256)
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read()[:400].decode("utf-8", errors="replace")
+        except Exception:
+            detail = ""
+        print(f"Twilio SMS failed HTTP {e.code}: {detail}")
+        raise RuntimeError("Could not send the text message. Check the mobile number and try again.")
+
+
+def _deliver_two_factor_code(method, destination, code):
+    if _two_factor_dev_echo():
+        print(f"TWO_FACTOR_DEV_ECHO {method} {destination} code={code}")
+        return
+    if method == "email":
+        _send_two_factor_email(destination, code)
+    else:
+        _send_two_factor_sms(destination, code)
+
+
+def _issue_two_factor_challenge(username, purpose, method, destination):
+    """Create a one-time code, send it, and return the public challenge payload."""
+    channel_error = _two_factor_channel_error(method)
+    if channel_error and not _two_factor_dev_echo():
+        raise RuntimeError(channel_error)
+    challenge_id = secrets.token_urlsafe(24)
+    code = f"{secrets.randbelow(1000000):06d}"
+    now_ms = int(datetime.now().timestamp() * 1000)
+    expires_at = now_ms + (TWO_FACTOR_CODE_TTL_SEC * 1000)
+    code_hash = _hash_two_factor_code(challenge_id, code)
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(cursor, "DELETE FROM two_factor_challenges WHERE expires_at < ?", (now_ms,))
+    run_execute(
+        cursor,
+        """INSERT INTO two_factor_challenges
+           (id, username, purpose, method, destination, code_hash, expires_at, attempts, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+        (challenge_id, username, purpose, method, destination, code_hash, expires_at, now_ms),
+    )
+    conn.commit()
+    conn.close()
+    try:
+        _deliver_two_factor_code(method, destination, code)
+    except Exception:
+        conn = get_conn()
+        cursor = conn.cursor()
+        run_execute(cursor, "DELETE FROM two_factor_challenges WHERE id=?", (challenge_id,))
+        conn.commit()
+        conn.close()
+        raise
+    payload = {
+        "two_factor_required": True,
+        "challenge_id": challenge_id,
+        "method": method,
+        "destination_hint": _mask_two_factor_destination(method, destination),
+    }
+    if _two_factor_dev_echo():
+        payload["dev_code"] = code
+    return payload
+
+
+def _user_login_json(username):
+    """Session payload issued only after password and the sign-in code both succeed."""
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        "SELECT username, name, role, patient_id, age, sex FROM users WHERE username=?",
+        (_norm(username).lower(),),
+    )
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return None
+    patient_id = user[3] or ""
+    if (user[2] or "").lower() in ("patient", "user") and not patient_id:
+        patient_id = generate_patient_id()
+        run_execute(cursor, "UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
+        conn.commit()
+        print(f"Generated User ID {patient_id} for {user[0]}")
+    conn.close()
+    role_out = user[2]
+    if _norm(role_out or "").lower() in ("patient", "doctor"):
+        role_out = "User"
+    return {
+        "username": user[0],
+        "name": user[1],
+        "role": role_out,
+        "patient_id": patient_id,
+        "age": user[4] if user[4] else None,
+        "sex": user[5] if len(user) > 5 and user[5] else "",
+        "feedback_token": _make_feedback_token(user[0]),
+        "onboarding_completed": _user_onboarding_completed(user[0]),
+    }
+
+
+@app.route("/api/auth/options", methods=["GET"])
+def auth_options():
+    """Public sign-up options: password rules and which code channels are configured."""
+    return jsonify(
+        {
+            "password_rules": PASSWORD_RULES_TEXT,
+            "email": _two_factor_email_ready() or _two_factor_dev_echo(),
+            "sms": _two_factor_sms_ready() or _two_factor_dev_echo(),
+        }
+    )
+
+
 @app.route('/api/users/login', methods=['POST'])
 def login():
-    """User login. Normalizes username/password (strip + NFKC) so different devices match."""
+    """Password check, then a one-time code by email or text before a session is issued."""
     data = request.get_json() or {}
     username = _norm(data.get('username') or '').lower()
     password = _norm(data.get('password') or '')
-    
+
     if not username or not password:
         return jsonify({"error": "Username and password required"}), 400
-    
+
     conn = get_conn()
     cursor = conn.cursor()
-    run_execute(cursor,
-        "SELECT username, password, name, role, patient_id, age, sex FROM users WHERE username=?",
-        (username,)
+    run_execute(
+        cursor,
+        """SELECT username, password, two_factor_method, two_factor_destination
+           FROM users WHERE username=?""",
+        (username,),
     )
     row = cursor.fetchone()
-    # Compare normalized passwords so stored (legacy) and input match across devices
-    stored_pass = (row[1] or '') if row and len(row) > 1 else ''
-    user = row if row and _norm(stored_pass) == password else None
-    
-    if user:
-        # If patient doesn't have an ID, generate one
-        patient_id = user[4] or ""
-        if user[3].lower() in ('patient', 'user') and not patient_id:
-            patient_id = generate_patient_id()
-            run_execute(cursor,"UPDATE users SET patient_id=? WHERE username=?", (patient_id, user[0]))
-            conn.commit()
-            print(f"Generated Patient ID {patient_id} for {user[0]}")
-        
-        conn.close()
-        fb_tok = _make_feedback_token(user[0])
-        onboarding_completed = _user_onboarding_completed(user[0])
-        role_out = user[3]
-        if _norm(role_out or '').lower() in ('patient', 'doctor'):
-            role_out = 'User'
-        return jsonify(
-            {
-                "username": user[0],
-                "name": user[2],
-                "role": role_out,
-                "patient_id": patient_id,
-                "age": user[5] if user[5] else None,
-                "sex": user[6] if len(user) > 6 and user[6] else "",
-                "feedback_token": fb_tok,
-                "onboarding_completed": onboarding_completed,
-            }
-        )
-    else:
-        # Log for debugging cross-device login: does this username exist?
+    conn.close()
+    stored_pass = (row[1] or "") if row and len(row) > 1 else ""
+    if not row or _norm(stored_pass) != password:
         user_exists = row is not None
         print(f"Login failed: username={username!r}, user_exists={user_exists} (check Render logs if cross-device)")
-        conn.close()
         return jsonify({"error": "Invalid username or password"}), 401
+
+    if not _two_factor_enforced():
+        session = _user_login_json(row[0])
+        if not session:
+            return jsonify({"error": "Invalid username or password"}), 401
+        return jsonify(session)
+
+    method = _norm(row[2] or "").lower()
+    destination = _norm(row[3] or "")
+    if method not in ("email", "sms") or not destination:
+        return jsonify(
+            {
+                "two_factor_setup_required": True,
+                "username": row[0],
+                "setup_token": _make_setup_token(row[0]),
+                "email": _two_factor_email_ready() or _two_factor_dev_echo(),
+                "sms": _two_factor_sms_ready() or _two_factor_dev_echo(),
+            }
+        )
+    try:
+        payload = _issue_two_factor_challenge(row[0], "login", method, destination)
+    except Exception as ex:
+        print(f"2FA send failed for {username}: {ex}")
+        return jsonify({"error": str(ex) or "Could not send your sign-in code."}), 503
+    payload["username"] = row[0]
+    return jsonify(payload)
+
+
+@app.route("/api/users/2fa/enroll", methods=["POST"])
+def two_factor_enroll():
+    """After a correct password, save nothing until the chosen email or phone proves it can receive a code."""
+    data = request.get_json() or {}
+    username = _norm(data.get("username") or "").lower()
+    if not _verify_setup_token(username, data.get("setup_token")):
+        return jsonify({"error": "That setup step expired. Enter your password again."}), 401
+    method, destination, contact_error = _parse_two_factor_contact(data)
+    if contact_error:
+        return jsonify({"error": contact_error}), 400
+    try:
+        payload = _issue_two_factor_challenge(username, "enroll", method, destination)
+    except Exception as ex:
+        print(f"2FA enroll send failed for {username}: {ex}")
+        return jsonify({"error": str(ex) or "Could not send your sign-in code."}), 503
+    payload["username"] = username
+    return jsonify(payload)
+
+
+@app.route("/api/users/2fa/verify", methods=["POST"])
+def two_factor_verify():
+    """Check the 6-digit code and only then return a logged-in session."""
+    data = request.get_json() or {}
+    challenge_id = _norm(data.get("challenge_id") or "")
+    code = re.sub(r"\D", "", data.get("code") or "")
+    if not challenge_id or len(code) != 6:
+        return jsonify({"error": "Enter the 6-digit code."}), 400
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        """SELECT username, purpose, method, destination, code_hash, expires_at, attempts
+           FROM two_factor_challenges WHERE id=?""",
+        (challenge_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "That code expired. Request a new one."}), 401
+    username, purpose, method, destination, code_hash, expires_at, attempts = row
+    attempts = int(attempts or 0) + 1
+    if attempts > TWO_FACTOR_MAX_ATTEMPTS or int(expires_at or 0) < now_ms:
+        run_execute(cursor, "DELETE FROM two_factor_challenges WHERE id=?", (challenge_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({"error": "That code expired. Request a new one."}), 401
+    expected = _hash_two_factor_code(challenge_id, code)
+    if not hmac.compare_digest(expected, code_hash or ""):
+        run_execute(
+            cursor,
+            "UPDATE two_factor_challenges SET attempts=? WHERE id=?",
+            (attempts, challenge_id),
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"error": "That code is not correct."}), 401
+
+    run_execute(cursor, "DELETE FROM two_factor_challenges WHERE id=?", (challenge_id,))
+    if purpose == "enroll":
+        run_execute(
+            cursor,
+            "UPDATE users SET two_factor_method=?, two_factor_destination=? WHERE username=?",
+            (method, destination, username),
+        )
+    conn.commit()
+    conn.close()
+    session = _user_login_json(username)
+    if not session:
+        return jsonify({"error": "Account not found."}), 404
+    return jsonify(session)
+
+
+@app.route("/api/users/2fa/resend", methods=["POST"])
+def two_factor_resend():
+    """Send a fresh code for an open challenge, with a short wait between sends."""
+    data = request.get_json() or {}
+    challenge_id = _norm(data.get("challenge_id") or "")
+    if not challenge_id:
+        return jsonify({"error": "Request a new code from the sign-in page."}), 400
+    now_ms = int(datetime.now().timestamp() * 1000)
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        """SELECT username, purpose, method, destination, created_at, expires_at
+           FROM two_factor_challenges WHERE id=?""",
+        (challenge_id,),
+    )
+    row = cursor.fetchone()
+    if not row or int(row[5] or 0) < now_ms:
+        if row:
+            run_execute(cursor, "DELETE FROM two_factor_challenges WHERE id=?", (challenge_id,))
+            conn.commit()
+        conn.close()
+        return jsonify({"error": "That code expired. Start sign-in again."}), 401
+    created_at = int(row[4] or 0)
+    if now_ms - created_at < TWO_FACTOR_RESEND_COOLDOWN_SEC * 1000:
+        conn.close()
+        return jsonify({"error": "Wait a few seconds before sending another code."}), 429
+    username, purpose, method, destination = row[0], row[1], row[2], row[3]
+    code = f"{secrets.randbelow(1000000):06d}"
+    expires_at = now_ms + (TWO_FACTOR_CODE_TTL_SEC * 1000)
+    code_hash = _hash_two_factor_code(challenge_id, code)
+    run_execute(
+        cursor,
+        """UPDATE two_factor_challenges
+           SET code_hash=?, expires_at=?, attempts=0, created_at=?
+           WHERE id=?""",
+        (code_hash, expires_at, now_ms, challenge_id),
+    )
+    conn.commit()
+    conn.close()
+    try:
+        _deliver_two_factor_code(method, destination, code)
+    except Exception as ex:
+        print(f"2FA resend failed for {username}: {ex}")
+        return jsonify({"error": str(ex) or "Could not send your sign-in code."}), 503
+    payload = {
+        "message": "A new code was sent.",
+        "challenge_id": challenge_id,
+        "method": method,
+        "destination_hint": _mask_two_factor_destination(method, destination),
+        "purpose": purpose,
+    }
+    if _two_factor_dev_echo():
+        payload["dev_code"] = code
+    return jsonify(payload)
+
 
 @app.route('/api/users', methods=['POST'])
 def create_user():
@@ -1713,9 +2210,13 @@ def create_user():
     name = _norm(data.get('name') or '')
     # Public sign-up is always a User account (doctor portal removed)
     role = 'User'
-    
+
     if not all([username, password, name]):
         return jsonify({"error": "Username, password, and name are required"}), 400
+
+    password_error = _password_policy_error(password)
+    if password_error:
+        return jsonify({"error": password_error}), 400
 
     if _norm(data.get('role') or '').lower() == "admin":
         return jsonify(
@@ -1724,10 +2225,19 @@ def create_user():
                 "Use the private admin setup URL and server bootstrap key from your operator."
             }
         ), 403
-    
+
+    method, destination = None, None
+    if _two_factor_enforced():
+        method, destination, contact_error = _parse_two_factor_contact(data)
+        if contact_error:
+            return jsonify({"error": contact_error}), 400
+        channel_error = _two_factor_channel_error(method)
+        if channel_error and not _two_factor_dev_echo():
+            return jsonify({"error": channel_error}), 503
+
     conn = get_conn()
     cursor = conn.cursor()
-    
+
     # Generate unique user ID (stored as patient_id for DB compatibility)
     patient_id = None
     while True:
@@ -1736,24 +2246,52 @@ def create_user():
         if not cursor.fetchone():
             patient_id = new_id
             break
-    
+
     try:
         onboarding_done = 0
         run_execute(cursor,
-            "INSERT INTO users (username, password, name, role, patient_id, onboarding_completed) VALUES (?, ?, ?, ?, ?, ?)",
-            (username, password, name, role, patient_id, onboarding_done)
+            """INSERT INTO users
+               (username, password, name, role, patient_id, onboarding_completed, two_factor_method, two_factor_destination)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (username, password, name, role, patient_id, onboarding_done, method, destination)
         )
         conn.commit()
         conn.close()
-        return jsonify({
-            "message": "User created successfully",
-            "patient_id": patient_id or ""
-        }), 201
     except sqlite3.IntegrityError as e:
         conn.close()
         if 'patient_id' in str(e):
-            return jsonify({"error": "Error generating patient ID. Please try again."}), 500
+            return jsonify({"error": "Error generating user ID. Please try again."}), 500
         return jsonify({"error": "Username already taken"}), 409
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        err = str(e).lower()
+        if "unique" in err or "integrity" in err:
+            return jsonify({"error": "Username already taken"}), 409
+        raise
+
+    if not _two_factor_enforced():
+        return jsonify({
+            "message": "User created successfully",
+            "patient_id": patient_id or "",
+        }), 201
+
+    try:
+        payload = _issue_two_factor_challenge(username, "login", method, destination)
+    except Exception as ex:
+        print(f"2FA send failed during registration for {username}: {ex}")
+        conn = get_conn()
+        cursor = conn.cursor()
+        run_execute(cursor, "DELETE FROM users WHERE username=?", (username,))
+        conn.commit()
+        conn.close()
+        return jsonify({"error": str(ex) or "Could not send your sign-in code. Account was not created."}), 503
+    payload["message"] = "Account created. Enter the code we just sent to finish signing in."
+    payload["patient_id"] = patient_id or ""
+    payload["username"] = username
+    return jsonify(payload), 201
 
 @app.route('/api/users/<username>', methods=['GET'])
 def get_user(username):
@@ -2881,6 +3419,351 @@ def finish_patient_onboarding(username):
         return jsonify({"error": f"Could not save intro: {str(e)}"}), 500
 
 
+FOOD_LOG_MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack", "pre-workout", "post-workout")
+FOOD_LOG_SEVERITY = ("none", "mild", "moderate", "severe")
+
+
+def _food_optional_number(value, maximum, as_int=False):
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0 or number > maximum:
+        return None
+    if as_int:
+        return int(round(number))
+    return round(number, 2)
+
+
+def _food_score(value):
+    number = _food_optional_number(value, 10, as_int=True)
+    if number is None or number < 1:
+        return None
+    return number
+
+
+def _normalize_food_log(username, log_date, data, existing_log_id=None):
+    """Turn a form payload into the dietitian food-log shape, or return an error string."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", log_date or ""):
+        return None, "Choose a valid date."
+    data = data or {}
+    meals_in = data.get("meals") if isinstance(data.get("meals"), list) else []
+    meals = []
+    for meal in meals_in[:12]:
+        if not isinstance(meal, dict):
+            continue
+        meal_type = _norm(meal.get("meal_type") or "snack").lower()
+        if meal_type not in FOOD_LOG_MEAL_TYPES:
+            meal_type = "snack"
+        items = []
+        for item in (meal.get("items") or [])[:20]:
+            if not isinstance(item, dict):
+                continue
+            food_name = _norm(item.get("food_name") or "")[:120]
+            if not food_name:
+                continue
+            serving_size = _food_optional_number(item.get("serving_size"), 10000)
+            if serving_size is None:
+                serving_size = 1
+            serving_unit = _norm(item.get("serving_unit") or "serving")[:40] or "serving"
+            cleaned = {
+                "food_id": _norm(item.get("food_id") or "")[:40] or secrets.token_hex(4),
+                "food_name": food_name,
+                "serving_size": serving_size,
+                "serving_unit": serving_unit,
+            }
+            for key, maximum, as_int in (
+                ("calories", 20000, True),
+                ("protein_g", 1000, False),
+                ("carbs_g", 2000, False),
+                ("fat_g", 1000, False),
+            ):
+                amount = _food_optional_number(item.get(key), maximum, as_int=as_int)
+                if amount is not None:
+                    cleaned[key] = amount
+            notes = _norm(item.get("notes") or "")[:300]
+            if notes:
+                cleaned["notes"] = notes
+            micros = {}
+            raw_micros = item.get("micronutrients") if isinstance(item.get("micronutrients"), dict) else {}
+            for name, amount in list(raw_micros.items())[:12]:
+                label = _norm(str(name))[:40]
+                value = _food_optional_number(amount, 100000)
+                if label and value is not None:
+                    micros[label] = value
+            if micros:
+                cleaned["micronutrients"] = micros
+            items.append(cleaned)
+        if not items:
+            continue
+        clock = _norm(meal.get("time") or "")
+        if not re.fullmatch(r"\d{2}:\d{2}", clock):
+            clock = "12:00"
+        cleaned_meal = {
+            "meal_id": _norm(meal.get("meal_id") or "")[:40] or secrets.token_hex(4),
+            "meal_type": meal_type,
+            "timestamp": f"{log_date}T{clock}:00",
+            "items": items,
+        }
+        hunger = _food_score(meal.get("hunger_score_before"))
+        fullness = _food_score(meal.get("satiety_score_after"))
+        if hunger is not None:
+            cleaned_meal["hunger_score_before"] = hunger
+        if fullness is not None:
+            cleaned_meal["satiety_score_after"] = fullness
+        meals.append(cleaned_meal)
+
+    symptoms = []
+    for symptom in (data.get("digestive_symptoms") or [])[:8]:
+        if not isinstance(symptom, dict):
+            continue
+        name = _norm(symptom.get("symptom") or "")[:80]
+        if not name:
+            continue
+        severity = _norm(symptom.get("severity") or "mild").lower()
+        if severity not in FOOD_LOG_SEVERITY:
+            severity = "mild"
+        entry = {"symptom": name, "severity": severity}
+        note = _norm(symptom.get("notes") or "")[:200]
+        if note:
+            entry["notes"] = note
+        symptoms.append(entry)
+
+    summary = {}
+    for key, source, maximum, as_int in (
+        ("total_calories", "calories", 50000, True),
+        ("total_protein_g", "protein_g", 5000, False),
+        ("total_carbs_g", "carbs_g", 5000, False),
+        ("total_fat_g", "fat_g", 5000, False),
+    ):
+        found = False
+        total = 0
+        for meal in meals:
+            for item in meal["items"]:
+                if source in item:
+                    found = True
+                    total += item[source]
+        if found:
+            summary[key] = int(round(total)) if as_int else round(total, 2)
+    water = _food_optional_number(data.get("water_intake_ml"), 20000, as_int=True)
+    if water is not None:
+        summary["water_intake_ml"] = water
+
+    markers = {}
+    glucose = _food_optional_number(data.get("fasting_blood_glucose_mgdL"), 1000)
+    weight = _food_optional_number(data.get("waking_weight_kg"), 500)
+    sleep = _food_optional_number(data.get("sleep_hours"), 24)
+    if glucose is not None:
+        markers["fasting_blood_glucose_mgdL"] = glucose
+    if weight is not None:
+        markers["waking_weight_kg"] = weight
+    if sleep is not None:
+        markers["sleep_hours"] = sleep
+    if symptoms:
+        markers["digestive_symptoms"] = symptoms
+
+    if not meals and not summary and not markers:
+        return None, "Add a meal or a daily check-in before saving."
+
+    payload = {
+        "log_id": existing_log_id or secrets.token_hex(8),
+        "user_id": username,
+        "date": log_date,
+        "meals": meals,
+    }
+    if summary:
+        payload["daily_summary"] = summary
+    if markers:
+        payload["clinical_markers"] = markers
+    return payload, None
+
+
+def _food_log_prompt_block(username):
+    """Recent saved days for the companion, kept short enough for the model."""
+    username = _norm(username or "").lower()
+    if not username:
+        return ""
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        """SELECT log_date, payload FROM food_logs
+           WHERE username=? ORDER BY log_date DESC LIMIT 14""",
+        (username,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows:
+        return ""
+    lines = [
+        "The user keeps a personal food log. Use it when they ask what they ate, how eating is going, or for meal ideas.",
+        "Do not invent meals, portions, or measurements that are not in this log. If a day is missing, say it was not logged.",
+        "Totals only add foods that had numbers filled in. Treat glucose, weight, and symptoms as the user's own notes, not a diagnosis.",
+    ]
+    for log_date, raw in rows:
+        try:
+            log = json.loads(raw or "{}")
+        except Exception:
+            continue
+        lines.append(f"Date {log.get('date') or log_date}:")
+        summary = log.get("daily_summary") or {}
+        bits = []
+        if summary.get("total_calories") is not None:
+            bits.append(f"{summary['total_calories']} kcal")
+        if summary.get("total_protein_g") is not None:
+            bits.append(f"protein {summary['total_protein_g']} g")
+        if summary.get("total_carbs_g") is not None:
+            bits.append(f"carbs {summary['total_carbs_g']} g")
+        if summary.get("total_fat_g") is not None:
+            bits.append(f"fat {summary['total_fat_g']} g")
+        if summary.get("water_intake_ml") is not None:
+            bits.append(f"water {summary['water_intake_ml']} ml")
+        if bits:
+            lines.append("  Daily: " + ", ".join(bits))
+        markers = log.get("clinical_markers") or {}
+        check = []
+        if markers.get("fasting_blood_glucose_mgdL") is not None:
+            check.append(f"fasting glucose {markers['fasting_blood_glucose_mgdL']} mg/dL")
+        if markers.get("waking_weight_kg") is not None:
+            check.append(f"waking weight {markers['waking_weight_kg']} kg")
+        if markers.get("sleep_hours") is not None:
+            check.append(f"sleep {markers['sleep_hours']} h")
+        for symptom in markers.get("digestive_symptoms") or []:
+            if isinstance(symptom, dict) and symptom.get("symptom"):
+                check.append(f"{symptom.get('symptom')} ({symptom.get('severity') or 'noted'})")
+        if check:
+            lines.append("  Check-in: " + "; ".join(check))
+        for meal in log.get("meals") or []:
+            when = str(meal.get("timestamp") or "")
+            clock = when[11:16] if len(when) >= 16 else ""
+            label = f"  - {meal.get('meal_type') or 'meal'}"
+            if clock:
+                label += f" {clock}"
+            if meal.get("hunger_score_before") is not None:
+                label += f", hunger {meal['hunger_score_before']}/10"
+            if meal.get("satiety_score_after") is not None:
+                label += f", fullness {meal['satiety_score_after']}/10"
+            lines.append(label)
+            for item in meal.get("items") or []:
+                piece = f"    - {item.get('food_name')} ({item.get('serving_size')} {item.get('serving_unit')})"
+                if item.get("calories") is not None:
+                    piece += f", {item['calories']} kcal"
+                if item.get("notes"):
+                    piece += f" — {item['notes']}"
+                lines.append(piece)
+    text = "\n".join(lines)
+    return text[:8000]
+
+
+@app.route("/api/users/<username>/food-logs", methods=["GET"])
+def list_food_logs(username):
+    """Recent food-log days for the signed-in user."""
+    username = _norm(username).lower()
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        """SELECT log_id, log_date, payload FROM food_logs
+           WHERE username=? ORDER BY log_date DESC LIMIT 30""",
+        (username,),
+    )
+    days = []
+    for log_id, log_date, raw in cursor.fetchall():
+        try:
+            log = json.loads(raw or "{}")
+        except Exception:
+            log = {}
+        summary = log.get("daily_summary") or {}
+        days.append({
+            "log_id": log_id,
+            "date": log_date,
+            "meal_count": len(log.get("meals") or []),
+            "total_calories": summary.get("total_calories"),
+        })
+    conn.close()
+    return jsonify({"days": days})
+
+
+@app.route("/api/users/<username>/food-logs/<log_date>", methods=["GET"])
+def get_food_log(username, log_date):
+    username = _norm(username).lower()
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        "SELECT payload FROM food_logs WHERE username=? AND log_date=?",
+        (username, log_date),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"log": None})
+    try:
+        return jsonify({"log": json.loads(row[0] or "{}")})
+    except Exception:
+        return jsonify({"log": None})
+
+
+@app.route("/api/users/<username>/food-logs/<log_date>", methods=["PUT"])
+def save_food_log(username, log_date):
+    username = _norm(username).lower()
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(cursor, "SELECT username FROM users WHERE username=?", (username,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({"error": "User not found"}), 404
+    run_execute(
+        cursor,
+        "SELECT log_id FROM food_logs WHERE username=? AND log_date=?",
+        (username, log_date),
+    )
+    existing = cursor.fetchone()
+    payload, error = _normalize_food_log(
+        username,
+        log_date,
+        request.get_json() or {},
+        existing[0] if existing else None,
+    )
+    if error:
+        conn.close()
+        return jsonify({"error": error}), 400
+    now_ms = int(datetime.now().timestamp() * 1000)
+    if existing:
+        run_execute(
+            cursor,
+            "UPDATE food_logs SET payload=?, updated_at=? WHERE username=? AND log_date=?",
+            (json.dumps(payload), now_ms, username, log_date),
+        )
+    else:
+        run_execute(
+            cursor,
+            """INSERT INTO food_logs (log_id, username, log_date, payload, updated_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (payload["log_id"], username, log_date, json.dumps(payload), now_ms),
+        )
+    conn.commit()
+    conn.close()
+    return jsonify({"log": payload})
+
+
+@app.route("/api/users/<username>/food-logs/<log_date>", methods=["DELETE"])
+def delete_food_log(username, log_date):
+    username = _norm(username).lower()
+    conn = get_conn()
+    cursor = conn.cursor()
+    run_execute(
+        cursor,
+        "DELETE FROM food_logs WHERE username=? AND log_date=?",
+        (username, log_date),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Food log deleted"})
+
+
 @app.route('/api/ai/advice', methods=['POST'])
 def get_ai_advice():
     """Get AI advice using OpenAI with conversation memory"""
@@ -2966,6 +3849,10 @@ def get_ai_advice():
         rating_feedback = _ai_rating_feedback_system_block(acting_username)
         if rating_feedback:
             messages.append({"role": "system", "content": rating_feedback})
+
+        food_log_block = _food_log_prompt_block(acting_username)
+        if food_log_block:
+            messages.append({"role": "system", "content": food_log_block})
 
         # Welcome interview (new patients) or normal first-message context
         if onboarding_interview:
@@ -3350,7 +4237,11 @@ def admin_console_setup(secret):
 
 @app.route('/')
 def serve_index():
-    return send_from_directory(BASE_DIR, 'index.html')
+    resp = send_from_directory(BASE_DIR, 'index.html')
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route("/manifest.webmanifest")

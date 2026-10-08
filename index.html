@@ -4,13 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Wellbeing Companion</title>
+    <script>
+        (function () {
+            try {
+                var theme = localStorage.getItem('wellbeingTheme');
+                if (theme === 'dark' || theme === 'light') {
+                    document.documentElement.setAttribute('data-theme', theme);
+                }
+            } catch (e) {}
+        })();
+    </script>
     <meta name="theme-color" content="#4f46e5">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="Wellbeing">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/pwa-icon-192.png">
-    <link rel="stylesheet" href="styles.css?v=5.0">
+    <link rel="stylesheet" href="styles.css?v=5.5">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -62,15 +72,87 @@
                     </div>
                     <div class="form-group">
                         <label for="registerPassword">Password</label>
-                        <input type="password" id="registerPassword" required>
+                        <input type="password" id="registerPassword" required autocomplete="new-password" minlength="8">
+                        <p id="registerPasswordRules" style="margin: 6px 0 0; font-size: 0.85rem; color: var(--text-light);">At least 8 characters, with an uppercase letter, a lowercase letter, a number, and a symbol.</p>
                     </div>
                     <div class="form-group">
                         <label for="registerConfirmPassword">Confirm Password</label>
-                        <input type="password" id="registerConfirmPassword" required>
+                        <input type="password" id="registerConfirmPassword" required autocomplete="new-password" minlength="8">
+                    </div>
+                    <fieldset id="registerTwoFactorFields" class="form-group" style="border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">
+                        <legend style="padding: 0 6px;">Sign-in code (choose one)</legend>
+                        <label style="display: block; margin-bottom: 8px;">
+                            <input type="radio" name="registerTwoFactor" id="registerMethodEmail" value="email" checked> Email
+                        </label>
+                        <label style="display: block;">
+                            <input type="radio" name="registerTwoFactor" id="registerMethodSms" value="sms"> Text message
+                        </label>
+                        <p id="registerChannelNote" style="margin: 8px 0 0; font-size: 0.85rem; color: var(--text-light);"></p>
+                    </fieldset>
+                    <div class="form-group" id="registerEmailGroup">
+                        <label for="registerEmail">Email</label>
+                        <input type="email" id="registerEmail" autocomplete="email" placeholder="you@example.com">
+                    </div>
+                    <div class="form-group" id="registerPhoneGroup" style="display: none;">
+                        <label for="registerPhone">Mobile number</label>
+                        <input type="tel" id="registerPhone" autocomplete="tel" placeholder="555-555-5555">
                     </div>
                     <button type="submit" class="btn btn-primary">Create Account</button>
                     <button type="button" class="btn btn-link" onclick="showScreen('loginScreen')">Back to Login</button>
                     <div id="registerError" class="error-message"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Second step: enter the email or text code -->
+    <div id="twoFactorScreen" class="screen">
+        <div class="container">
+            <div class="card">
+                <h1>Enter your code</h1>
+                <p id="twoFactorHint" style="color: var(--text-light);">We sent a 6-digit code.</p>
+                <form id="twoFactorForm">
+                    <div class="form-group">
+                        <label for="twoFactorCode">6-digit code</label>
+                        <input type="text" id="twoFactorCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="twoFactorSubmit">Verify</button>
+                    <button type="button" class="btn btn-link" id="twoFactorResend">Send a new code</button>
+                    <button type="button" class="btn btn-link" onclick="showScreen('loginScreen')">Back to login</button>
+                    <div id="twoFactorError" class="error-message"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Existing accounts pick email or text once -->
+    <div id="twoFactorSetupScreen" class="screen">
+        <div class="container">
+            <div class="card">
+                <h1>Add a sign-in code</h1>
+                <p style="color: var(--text-light);">Choose email or a text message. You only need one. We'll send a code to confirm it.</p>
+                <form id="twoFactorSetupForm">
+                    <fieldset class="form-group" style="border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">
+                        <legend style="padding: 0 6px;">Send the code by</legend>
+                        <label style="display: block; margin-bottom: 8px;">
+                            <input type="radio" name="setupTwoFactor" id="setupMethodEmail" value="email" checked> Email
+                        </label>
+                        <label style="display: block;">
+                            <input type="radio" name="setupTwoFactor" id="setupMethodSms" value="sms"> Text message
+                        </label>
+                        <p id="setupChannelNote" style="margin: 8px 0 0; font-size: 0.85rem; color: var(--text-light);"></p>
+                    </fieldset>
+                    <div class="form-group" id="setupEmailGroup">
+                        <label for="setupEmail">Email</label>
+                        <input type="email" id="setupEmail" autocomplete="email" placeholder="you@example.com">
+                    </div>
+                    <div class="form-group" id="setupPhoneGroup" style="display: none;">
+                        <label for="setupPhone">Mobile number</label>
+                        <input type="tel" id="setupPhone" autocomplete="tel" placeholder="555-555-5555">
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="twoFactorSetupSubmit">Send code</button>
+                    <button type="button" class="btn btn-link" onclick="showScreen('loginScreen')">Back to login</button>
+                    <div id="twoFactorSetupError" class="error-message"></div>
                 </form>
             </div>
         </div>
@@ -100,6 +182,9 @@
         <div class="user-nav-tabs">
             <button class="nav-tab active" onclick="showUserTab('main')" id="tab-main">
                 <span>💬</span> Main
+            </button>
+            <button class="nav-tab" onclick="showUserTab('food')" id="tab-food">
+                <span>🍽️</span> Food
             </button>
             <button class="nav-tab" onclick="showUserTab('account')" id="tab-account">
                 <span>👤</span> Account
@@ -150,6 +235,61 @@
                     </form>
                     <div id="aiResponse" class="ai-response conversation-display" style="position: relative; z-index: 2;">
                         <p class="ai-placeholder">AI response will appear here...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Food Log Tab -->
+        <div id="userTab-food" class="user-tab-content">
+            <div class="container">
+                <div class="card">
+                    <h3>Food log</h3>
+                    <p class="settings-note">Write down what you eat. The AI companion uses saved days when you ask about meals, nutrition, or how eating is going.</p>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="foodLogDate">Date</label>
+                            <input type="date" id="foodLogDate">
+                        </div>
+                        <div class="form-group">
+                            <label for="foodLogWater">Water (ml)</label>
+                            <input type="number" id="foodLogWater" min="0" max="20000" step="1" placeholder="e.g. 2000">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="foodLogGlucose">Fasting glucose (mg/dL)</label>
+                            <input type="number" id="foodLogGlucose" min="0" max="1000" step="0.1" placeholder="Optional">
+                        </div>
+                        <div class="form-group">
+                            <label for="foodLogWeight">Waking weight (kg)</label>
+                            <input type="number" id="foodLogWeight" min="0" max="500" step="0.1" placeholder="Optional">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="foodLogSleep">Sleep (hours)</label>
+                        <input type="number" id="foodLogSleep" min="0" max="24" step="0.1" placeholder="Optional">
+                    </div>
+                    <div class="form-group">
+                        <label>Digestion</label>
+                        <div id="foodLogSymptoms"></div>
+                        <button type="button" class="btn btn-link" id="foodLogAddSymptom">Add a symptom</button>
+                    </div>
+                </div>
+                <div class="card">
+                    <h3>Meals</h3>
+                    <div id="foodLogMeals"></div>
+                    <button type="button" class="btn btn-secondary" id="foodLogAddMeal">Add meal</button>
+                </div>
+                <div class="card">
+                    <button type="button" class="btn btn-primary" id="foodLogSave">Save this day</button>
+                    <button type="button" class="btn btn-link" id="foodLogDelete" style="display: none;">Delete this day</button>
+                    <p id="foodLogStatus" class="settings-note" role="status"></p>
+                </div>
+                <div class="card">
+                    <h3>Recent days</h3>
+                    <div id="foodLogRecent" class="food-recent-list">
+                        <p class="settings-note">No saved days yet.</p>
                     </div>
                 </div>
             </div>
@@ -219,8 +359,21 @@
         <div id="userTab-settings" class="user-tab-content">
             <div class="container">
                 <div class="card">
-                    <h3>Settings</h3>
-                    <p style="color: var(--text-light);">Settings options will be available here.</p>
+                    <h3>Appearance</h3>
+                    <p class="settings-note">Choose light or dark mode. This choice stays on this device.</p>
+                    <fieldset class="theme-picker">
+                        <legend>Theme</legend>
+                        <div class="theme-choices">
+                            <label class="theme-choice">
+                                <input type="radio" name="themeMode" value="light">
+                                <span>Light</span>
+                            </label>
+                            <label class="theme-choice">
+                                <input type="radio" name="themeMode" value="dark">
+                                <span>Dark</span>
+                            </label>
+                        </div>
+                    </fieldset>
                 </div>
             </div>
         </div>
@@ -252,8 +405,8 @@
         <button onclick="document.getElementById('debugPanel').style.display='none'" style="margin-top: 5px; padding: 5px;">Close</button>
     </div>
 
-    <script src="api-service.js?v=5.0"></script>
-    <script src="app.js?v=6.0"></script>
+    <script src="api-service.js?v=5.1"></script>
+    <script src="app.js?v=6.4"></script>
     <script>
         // Show which site we're on (so tablet users can confirm same URL as desktop)
         (function () {

@@ -1,5 +1,5 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '6.0';
+window.WELLBEING_APP_JS_VERSION = '6.4';
 
 var ONBOARDING_START_TOKEN = '__ONBOARDING_START__';
 var userOnboardingActive = false;
@@ -7,6 +7,9 @@ var userOnboardingKickoffStarted = false;
 
 // Current user state
 let currentUser = null;
+let pendingTwoFactor = null;
+let pendingTwoFactorSetup = null;
+let authOptions = { email: true, sms: true };
 
 // AI Conversation history - stores conversation for current session
 let aiConversationHistory = [];
@@ -47,10 +50,12 @@ async function initializeApp() {
     apiService.init().catch(error => {
         console.warn('Server connection check:', error);
     });
+    loadAuthOptions();
 
     // Setup event listeners
     console.log('Setting up event listeners...');
     setupEventListeners();
+    initThemeControls();
     
     // Add connection test button to login screen
     addConnectionTestButton();
@@ -98,6 +103,33 @@ function addConnectionTestButton() {
     loginForm.insertBefore(testBtn, errorDiv);
 }
 
+function applyTheme(theme) {
+    var next = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    try {
+        localStorage.setItem('wellbeingTheme', next);
+    } catch (e) {}
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', next === 'dark' ? '#0f172a' : '#4f46e5');
+    document.querySelectorAll('input[name="themeMode"]').forEach(function (el) {
+        el.checked = el.value === next;
+    });
+}
+
+function initThemeControls() {
+    var saved = 'light';
+    try {
+        var stored = localStorage.getItem('wellbeingTheme');
+        if (stored === 'dark' || stored === 'light') saved = stored;
+    } catch (e) {}
+    applyTheme(saved);
+    document.querySelectorAll('input[name="themeMode"]').forEach(function (el) {
+        el.addEventListener('change', function () {
+            if (el.checked) applyTheme(el.value);
+        });
+    });
+}
+
 function setupEventListeners() {
     // Login form
     document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -110,6 +142,32 @@ function setupEventListeners() {
         e.preventDefault();
         await handleRegister();
     });
+    document.querySelectorAll('input[name="registerTwoFactor"]').forEach(function (el) {
+        el.addEventListener('change', updateRegisterContactFields);
+    });
+    document.querySelectorAll('input[name="setupTwoFactor"]').forEach(function (el) {
+        el.addEventListener('change', updateSetupContactFields);
+    });
+    const twoFactorForm = document.getElementById('twoFactorForm');
+    if (twoFactorForm) {
+        twoFactorForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await handleTwoFactorVerify();
+        });
+    }
+    const twoFactorResend = document.getElementById('twoFactorResend');
+    if (twoFactorResend) {
+        twoFactorResend.addEventListener('click', async () => {
+            await handleTwoFactorResend();
+        });
+    }
+    const twoFactorSetupForm = document.getElementById('twoFactorSetupForm');
+    if (twoFactorSetupForm) {
+        twoFactorSetupForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await handleTwoFactorSetup();
+        });
+    }
 
     // User preferences form
     document.getElementById('userPrefsForm').addEventListener('submit', async (e) => {
@@ -122,6 +180,19 @@ function setupEventListeners() {
         e.preventDefault();
         await saveUserAccount();
     });
+
+    const foodLogDate = document.getElementById('foodLogDate');
+    if (foodLogDate) {
+        foodLogDate.addEventListener('change', () => loadFoodLogForSelectedDate());
+    }
+    const foodLogAddMeal = document.getElementById('foodLogAddMeal');
+    if (foodLogAddMeal) foodLogAddMeal.addEventListener('click', () => addFoodMealRow());
+    const foodLogAddSymptom = document.getElementById('foodLogAddSymptom');
+    if (foodLogAddSymptom) foodLogAddSymptom.addEventListener('click', () => addFoodSymptomRow());
+    const foodLogSave = document.getElementById('foodLogSave');
+    if (foodLogSave) foodLogSave.addEventListener('click', () => saveFoodLogDay());
+    const foodLogDelete = document.getElementById('foodLogDelete');
+    if (foodLogDelete) foodLogDelete.addEventListener('click', () => deleteFoodLogDay());
 
     // AI form - attach event listener (only one should exist now)
     const aiForm = document.getElementById('aiForm');
@@ -231,6 +302,149 @@ function showScreen(screenId) {
     }
 }
 
+function passwordPolicyError(password) {
+    if (!password || password.length < 8
+        || !/[A-Z]/.test(password)
+        || !/[a-z]/.test(password)
+        || !/[0-9]/.test(password)
+        || !/[^A-Za-z0-9]/.test(password)) {
+        return 'Use at least 8 characters with an uppercase letter, a lowercase letter, a number, and a symbol.';
+    }
+    return '';
+}
+
+function selectedRadioValue(name) {
+    const el = document.querySelector('input[name="' + name + '"]:checked');
+    return el ? el.value : '';
+}
+
+function updateRegisterContactFields() {
+    const method = selectedRadioValue('registerTwoFactor') || 'email';
+    const emailGroup = document.getElementById('registerEmailGroup');
+    const phoneGroup = document.getElementById('registerPhoneGroup');
+    if (emailGroup) emailGroup.style.display = method === 'email' ? '' : 'none';
+    if (phoneGroup) phoneGroup.style.display = method === 'sms' ? '' : 'none';
+}
+
+function updateSetupContactFields() {
+    const method = selectedRadioValue('setupTwoFactor') || 'email';
+    const emailGroup = document.getElementById('setupEmailGroup');
+    const phoneGroup = document.getElementById('setupPhoneGroup');
+    if (emailGroup) emailGroup.style.display = method === 'email' ? '' : 'none';
+    if (phoneGroup) phoneGroup.style.display = method === 'sms' ? '' : 'none';
+}
+
+function applyChannelRadios(emailId, smsId, noteId) {
+    const emailRadio = document.getElementById(emailId);
+    const smsRadio = document.getElementById(smsId);
+    const note = document.getElementById(noteId);
+    const emailOn = authOptions.email !== false;
+    const smsOn = authOptions.sms !== false;
+    if (emailRadio) {
+        emailRadio.disabled = !emailOn;
+        if (!emailOn) emailRadio.checked = false;
+    }
+    if (smsRadio) {
+        smsRadio.disabled = !smsOn;
+        if (!smsOn) smsRadio.checked = false;
+    }
+    if (emailOn && emailRadio && !(smsRadio && smsRadio.checked)) emailRadio.checked = true;
+    if (!emailOn && smsOn && smsRadio) smsRadio.checked = true;
+    if (note) {
+        note.textContent = (!emailOn && !smsOn)
+            ? 'Sign-in codes are not turned on for this server yet. Email needs the mail settings, and text needs Twilio.'
+            : '';
+    }
+}
+
+async function loadAuthOptions() {
+    try {
+        const options = await apiService.getAuthOptions();
+        authOptions = options || authOptions;
+        const rules = document.getElementById('registerPasswordRules');
+        if (rules && options && options.password_rules) rules.textContent = options.password_rules;
+    } catch (e) {
+        console.warn('Could not load sign-in options:', e);
+    }
+    applyChannelRadios('registerMethodEmail', 'registerMethodSms', 'registerChannelNote');
+    updateRegisterContactFields();
+    const codesOn = authOptions.email !== false || authOptions.sms !== false;
+    const codeFields = document.getElementById('registerTwoFactorFields');
+    if (codeFields) codeFields.style.display = codesOn ? '' : 'none';
+    if (!codesOn) {
+        const emailGroup = document.getElementById('registerEmailGroup');
+        const phoneGroup = document.getElementById('registerPhoneGroup');
+        if (emailGroup) emailGroup.style.display = 'none';
+        if (phoneGroup) phoneGroup.style.display = 'none';
+    }
+}
+
+function twoFactorHintText(payload) {
+    const via = payload.method === 'sms' ? 'text' : 'email';
+    let text = 'We sent a 6-digit code by ' + via;
+    if (payload.destination_hint) text += ' to ' + payload.destination_hint;
+    text += '. It expires in 10 minutes.';
+    if (payload.dev_code) text += ' Developer code: ' + payload.dev_code;
+    return text;
+}
+
+function showTwoFactorChallenge(payload) {
+    pendingTwoFactor = {
+        challengeId: payload.challenge_id,
+        username: payload.username || ''
+    };
+    const hint = document.getElementById('twoFactorHint');
+    const code = document.getElementById('twoFactorCode');
+    const err = document.getElementById('twoFactorError');
+    if (hint) hint.textContent = twoFactorHintText(payload);
+    if (code) code.value = '';
+    if (err) err.textContent = '';
+    showScreen('twoFactorScreen');
+    if (code) code.focus();
+}
+
+function showTwoFactorSetup(payload) {
+    pendingTwoFactorSetup = {
+        username: payload.username || '',
+        setupToken: payload.setup_token || ''
+    };
+    if (typeof payload.email === 'boolean' || typeof payload.sms === 'boolean') {
+        authOptions = {
+            email: payload.email !== false,
+            sms: payload.sms !== false,
+            password_rules: authOptions.password_rules
+        };
+    }
+    applyChannelRadios('setupMethodEmail', 'setupMethodSms', 'setupChannelNote');
+    updateSetupContactFields();
+    const err = document.getElementById('twoFactorSetupError');
+    if (err) err.textContent = '';
+    showScreen('twoFactorSetupScreen');
+}
+
+function completeLogin(user) {
+    const userData = {
+        username: user.username || '',
+        name: user.name || user.full_name || '',
+        role: user.role || 'User',
+        patient_id: user.patient_id || '',
+        age: user.age || null,
+        feedback_token: user.feedback_token || user.feedbackToken || '',
+        onboarding_completed: user.onboarding_completed !== false && user.onboarding_completed !== 0
+    };
+    if (!userData.username) {
+        return false;
+    }
+    const r = (userData.role || '').toLowerCase();
+    if (r === 'patient' || r === 'doctor') userData.role = 'User';
+    currentUser = userData;
+    pendingTwoFactor = null;
+    pendingTwoFactorSetup = null;
+    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    showUserHome();
+    return true;
+}
+
 // Login handler
 async function handleLogin() {
     const username = document.getElementById('loginUsername').value.trim();
@@ -254,28 +468,17 @@ async function handleLogin() {
             return;
         }
 
-        // Handle different response formats
-        const userData = {
-            username: user.username || username,
-            name: user.name || user.full_name || '',
-            role: user.role || 'User',
-            patient_id: user.patient_id || '',
-            age: user.age || null,
-            feedback_token: user.feedback_token || user.feedbackToken || '',
-            onboarding_completed: user.onboarding_completed !== false && user.onboarding_completed !== 0
-        };
-
-        if (!userData.username) {
-            errorDiv.textContent = 'Invalid response from server. Please check the console.';
+        if (user.two_factor_setup_required) {
+            showTwoFactorSetup(user);
             return;
         }
-
-        // Map legacy Patient/Doctor roles to User (doctor portal removed)
-        const r = (userData.role || '').toLowerCase();
-        if (r === 'patient' || r === 'doctor') userData.role = 'User';
-        currentUser = userData;
-        localStorage.setItem('currentUser', JSON.stringify(currentUser));
-        showUserHome();
+        if (user.two_factor_required) {
+            showTwoFactorChallenge(user);
+            return;
+        }
+        if (!completeLogin(user)) {
+            errorDiv.textContent = 'Invalid response from server. Please check the console.';
+        }
     } catch (error) {
         let errorMessage = error.message || 'Invalid username or password.';
         
@@ -315,23 +518,45 @@ async function handleRegister() {
         return;
     }
 
+    const policyError = passwordPolicyError(password);
+    if (policyError) {
+        errorDiv.textContent = policyError;
+        return;
+    }
+
+    const channelsOn = authOptions.email !== false || authOptions.sms !== false;
+    const method = selectedRadioValue('registerTwoFactor');
+    const email = (document.getElementById('registerEmail').value || '').trim();
+    const phone = (document.getElementById('registerPhone').value || '').trim();
+    if (channelsOn && method === 'email' && !email) {
+        errorDiv.textContent = 'Enter the email address that should receive your sign-in code.';
+        return;
+    }
+    if (channelsOn && method === 'sms' && !phone) {
+        errorDiv.textContent = 'Enter the mobile number that should receive your sign-in code.';
+        return;
+    }
+
     try {
         console.log('Attempting registration for:', username);
         const response = await apiService.createUser({
             username,
             password,
             name,
-            role
+            role,
+            method,
+            email,
+            phone
         });
         console.log('Registration response:', response);
 
-        if (response.patient_id) {
-            showToast(`Registration successful! Your User ID is: ${response.patient_id}. Please log in.`, 'success');
-        } else {
-            showToast('Registration successful! Please log in.', 'success');
+        if (response.two_factor_required) {
+            showToast('Account created. Enter the code we just sent.', 'success');
+            showTwoFactorChallenge(response);
+            return;
         }
+        showToast('Registration successful! Please log in.', 'success');
         showScreen('loginScreen');
-        // Clear form
         document.getElementById('registerForm').reset();
         errorDiv.textContent = '';
     } catch (error) {
@@ -346,6 +571,101 @@ async function handleRegister() {
         errorDiv.textContent = errorMessage;
         console.error('Registration error details:', error);
         showToast(`Registration failed: ${errorMessage.split('\n')[0]}`, 'error');
+    }
+}
+
+async function handleTwoFactorVerify() {
+    const err = document.getElementById('twoFactorError');
+    const codeEl = document.getElementById('twoFactorCode');
+    const btn = document.getElementById('twoFactorSubmit');
+    const code = (codeEl && codeEl.value ? codeEl.value : '').replace(/\D/g, '');
+    if (err) err.textContent = '';
+    if (!pendingTwoFactor || !pendingTwoFactor.challengeId) {
+        if (err) err.textContent = 'Start sign-in again.';
+        return;
+    }
+    if (code.length !== 6) {
+        if (err) err.textContent = 'Enter the 6-digit code.';
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Checking...';
+    }
+    try {
+        const user = await apiService.verifyTwoFactor({
+            challenge_id: pendingTwoFactor.challengeId,
+            code
+        });
+        if (!completeLogin(user)) {
+            if (err) err.textContent = 'Sign-in could not be finished. Try again.';
+        }
+    } catch (error) {
+        if (err) err.textContent = error.message || 'That code is not correct.';
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Verify';
+        }
+    }
+}
+
+async function handleTwoFactorResend() {
+    const err = document.getElementById('twoFactorError');
+    const hint = document.getElementById('twoFactorHint');
+    if (!pendingTwoFactor || !pendingTwoFactor.challengeId) {
+        if (err) err.textContent = 'Start sign-in again.';
+        return;
+    }
+    if (err) err.textContent = '';
+    try {
+        const response = await apiService.resendTwoFactor(pendingTwoFactor.challengeId);
+        if (hint) hint.textContent = twoFactorHintText(response);
+        showToast('A new code was sent.', 'success');
+    } catch (error) {
+        if (err) err.textContent = error.message || 'Could not send a new code.';
+    }
+}
+
+async function handleTwoFactorSetup() {
+    const err = document.getElementById('twoFactorSetupError');
+    const btn = document.getElementById('twoFactorSetupSubmit');
+    if (err) err.textContent = '';
+    if (!pendingTwoFactorSetup || !pendingTwoFactorSetup.setupToken) {
+        if (err) err.textContent = 'Enter your password again.';
+        return;
+    }
+    const method = selectedRadioValue('setupTwoFactor');
+    const email = (document.getElementById('setupEmail').value || '').trim();
+    const phone = (document.getElementById('setupPhone').value || '').trim();
+    if (method === 'email' && !email) {
+        if (err) err.textContent = 'Enter the email address that should receive your sign-in code.';
+        return;
+    }
+    if (method === 'sms' && !phone) {
+        if (err) err.textContent = 'Enter the mobile number that should receive your sign-in code.';
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+    }
+    try {
+        const response = await apiService.enrollTwoFactor({
+            username: pendingTwoFactorSetup.username,
+            setup_token: pendingTwoFactorSetup.setupToken,
+            method,
+            email,
+            phone
+        });
+        showTwoFactorChallenge(response);
+    } catch (error) {
+        if (err) err.textContent = error.message || 'Could not send a code.';
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Send code';
+        }
     }
 }
 
@@ -560,6 +880,404 @@ window.showUserTab = function showUserTab(tabName) {
     // Load data for account tab when switching to it (refresh so notes are up to date)
     if (tabName === 'account') {
         loadUserAccount();
+    }
+    if (tabName === 'food') {
+        ensureFoodLogReady();
+    }
+}
+
+const FOOD_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack', 'pre-workout', 'post-workout'];
+let foodLogReady = false;
+
+function todayInputDate() {
+    const now = new Date();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return now.getFullYear() + '-' + month + '-' + day;
+}
+
+function foodField(labelText, control) {
+    const wrap = document.createElement('div');
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    wrap.appendChild(label);
+    wrap.appendChild(control);
+    return wrap;
+}
+
+function foodNumberInput(value, step, max) {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.max = String(max);
+    input.step = step;
+    if (value !== undefined && value !== null && value !== '') input.value = value;
+    return input;
+}
+
+function foodRemoveButton(onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-link food-remove';
+    button.textContent = 'Remove';
+    button.addEventListener('click', onClick);
+    return button;
+}
+
+function addFoodNutrientRow(container, name, amount) {
+    const row = document.createElement('div');
+    row.className = 'food-nutrient-row';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.placeholder = 'sodium_mg';
+    nameInput.value = name || '';
+    const amountInput = foodNumberInput(amount, '0.1', 100000);
+    row.appendChild(nameInput);
+    row.appendChild(amountInput);
+    row.appendChild(foodRemoveButton(() => row.remove()));
+    container.appendChild(row);
+}
+
+function addFoodItemRow(list, item) {
+    item = item || {};
+    const card = document.createElement('div');
+    card.className = 'food-item';
+    const main = document.createElement('div');
+    main.className = 'food-item-main';
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'food-name';
+    name.placeholder = 'Food name';
+    name.value = item.food_name || '';
+    const size = foodNumberInput(item.serving_size, '0.1', 10000);
+    size.className = 'food-serving-size';
+    const unit = document.createElement('input');
+    unit.type = 'text';
+    unit.className = 'food-serving-unit';
+    unit.placeholder = 'cup, g, piece';
+    unit.value = item.serving_unit || '';
+    main.appendChild(foodField('Food', name));
+    main.appendChild(foodField('Amount', size));
+    main.appendChild(foodField('Unit', unit));
+    main.appendChild(foodRemoveButton(() => card.remove()));
+    const macros = document.createElement('div');
+    macros.className = 'food-item-macros';
+    const calories = foodNumberInput(item.calories, '1', 20000);
+    calories.className = 'food-calories';
+    const protein = foodNumberInput(item.protein_g, '0.1', 1000);
+    protein.className = 'food-protein';
+    const carbs = foodNumberInput(item.carbs_g, '0.1', 2000);
+    carbs.className = 'food-carbs';
+    const fat = foodNumberInput(item.fat_g, '0.1', 1000);
+    fat.className = 'food-fat';
+    macros.appendChild(foodField('Calories', calories));
+    macros.appendChild(foodField('Protein (g)', protein));
+    macros.appendChild(foodField('Carbs (g)', carbs));
+    macros.appendChild(foodField('Fat (g)', fat));
+    const notes = document.createElement('input');
+    notes.type = 'text';
+    notes.className = 'food-notes';
+    notes.placeholder = 'Brand, preparation, or other detail';
+    notes.value = item.notes || '';
+    const nutrients = document.createElement('div');
+    nutrients.className = 'food-nutrients';
+    const micros = item.micronutrients || {};
+    Object.keys(micros).forEach((key) => addFoodNutrientRow(nutrients, key, micros[key]));
+    const addNutrient = document.createElement('button');
+    addNutrient.type = 'button';
+    addNutrient.className = 'btn btn-link';
+    addNutrient.textContent = 'Add nutrient';
+    addNutrient.addEventListener('click', () => addFoodNutrientRow(nutrients));
+    card.appendChild(main);
+    card.appendChild(macros);
+    card.appendChild(foodField('Notes', notes));
+    card.appendChild(nutrients);
+    card.appendChild(addNutrient);
+    list.appendChild(card);
+}
+
+function addFoodMealRow(meal) {
+    meal = meal || {};
+    const list = document.getElementById('foodLogMeals');
+    if (!list) return;
+    const card = document.createElement('div');
+    card.className = 'food-meal';
+    const head = document.createElement('div');
+    head.className = 'food-meal-head';
+    const type = document.createElement('select');
+    type.className = 'food-meal-type';
+    FOOD_MEAL_TYPES.forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value.charAt(0).toUpperCase() + value.slice(1);
+        type.appendChild(option);
+    });
+    type.value = FOOD_MEAL_TYPES.indexOf(meal.meal_type) >= 0 ? meal.meal_type : 'breakfast';
+    const time = document.createElement('input');
+    time.type = 'time';
+    time.className = 'food-meal-time';
+    const stamp = String(meal.timestamp || '');
+    time.value = stamp.length >= 16 ? stamp.slice(11, 16) : '';
+    const hunger = foodNumberInput(meal.hunger_score_before, '1', 10);
+    hunger.min = '1';
+    hunger.className = 'food-hunger';
+    const fullness = foodNumberInput(meal.satiety_score_after, '1', 10);
+    fullness.min = '1';
+    fullness.className = 'food-fullness';
+    head.appendChild(foodField('Meal', type));
+    head.appendChild(foodField('Time', time));
+    head.appendChild(foodField('Hunger 1–10', hunger));
+    head.appendChild(foodField('Fullness 1–10', fullness));
+    head.appendChild(foodRemoveButton(() => card.remove()));
+    const items = document.createElement('div');
+    items.className = 'food-items';
+    const foods = Array.isArray(meal.items) && meal.items.length ? meal.items : [{}];
+    foods.forEach((item) => addFoodItemRow(items, item));
+    const addItem = document.createElement('button');
+    addItem.type = 'button';
+    addItem.className = 'btn btn-link';
+    addItem.textContent = 'Add food';
+    addItem.addEventListener('click', () => addFoodItemRow(items));
+    card.appendChild(head);
+    card.appendChild(items);
+    card.appendChild(addItem);
+    list.appendChild(card);
+}
+
+function addFoodSymptomRow(symptom) {
+    symptom = symptom || {};
+    const list = document.getElementById('foodLogSymptoms');
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = 'food-symptom';
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'food-symptom-name';
+    name.placeholder = 'e.g. bloating';
+    name.value = symptom.symptom || '';
+    const severity = document.createElement('select');
+    severity.className = 'food-symptom-severity';
+    ['none', 'mild', 'moderate', 'severe'].forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value.charAt(0).toUpperCase() + value.slice(1);
+        severity.appendChild(option);
+    });
+    severity.value = symptom.severity || 'mild';
+    const notes = document.createElement('input');
+    notes.type = 'text';
+    notes.className = 'food-symptom-notes';
+    notes.placeholder = 'Optional note';
+    notes.value = symptom.notes || '';
+    row.appendChild(foodField('Symptom', name));
+    row.appendChild(foodField('Severity', severity));
+    row.appendChild(foodField('Notes', notes));
+    row.appendChild(foodRemoveButton(() => row.remove()));
+    list.appendChild(row);
+}
+
+function setFoodLogStatus(message, isError) {
+    const status = document.getElementById('foodLogStatus');
+    if (!status) return;
+    status.textContent = message || '';
+    status.style.color = isError ? 'var(--error-color)' : 'var(--text-light)';
+}
+
+function clearFoodLogForm(keepDate) {
+    const dateEl = document.getElementById('foodLogDate');
+    if (dateEl && !keepDate && !dateEl.value) dateEl.value = todayInputDate();
+    ['foodLogWater', 'foodLogGlucose', 'foodLogWeight', 'foodLogSleep'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    const symptoms = document.getElementById('foodLogSymptoms');
+    const meals = document.getElementById('foodLogMeals');
+    if (symptoms) symptoms.innerHTML = '';
+    if (meals) meals.innerHTML = '';
+    addFoodMealRow();
+    const del = document.getElementById('foodLogDelete');
+    if (del) del.style.display = 'none';
+}
+
+function fillFoodLogForm(log) {
+    clearFoodLogForm(true);
+    const summary = (log && log.daily_summary) || {};
+    const markers = (log && log.clinical_markers) || {};
+    const water = document.getElementById('foodLogWater');
+    const glucose = document.getElementById('foodLogGlucose');
+    const weight = document.getElementById('foodLogWeight');
+    const sleep = document.getElementById('foodLogSleep');
+    if (water && summary.water_intake_ml != null) water.value = summary.water_intake_ml;
+    if (glucose && markers.fasting_blood_glucose_mgdL != null) glucose.value = markers.fasting_blood_glucose_mgdL;
+    if (weight && markers.waking_weight_kg != null) weight.value = markers.waking_weight_kg;
+    if (sleep && markers.sleep_hours != null) sleep.value = markers.sleep_hours;
+    const meals = document.getElementById('foodLogMeals');
+    if (meals) meals.innerHTML = '';
+    const savedMeals = log && Array.isArray(log.meals) ? log.meals : [];
+    if (savedMeals.length) savedMeals.forEach((meal) => addFoodMealRow(meal));
+    else addFoodMealRow();
+    (markers.digestive_symptoms || []).forEach((symptom) => addFoodSymptomRow(symptom));
+    const del = document.getElementById('foodLogDelete');
+    if (del) del.style.display = log ? '' : 'none';
+}
+
+function readOptionalNumber(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return undefined;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : undefined;
+}
+
+function readFoodLogForm() {
+    const meals = [];
+    document.querySelectorAll('#foodLogMeals .food-meal').forEach((card) => {
+        const items = [];
+        card.querySelectorAll('.food-item').forEach((itemCard) => {
+            const micros = {};
+            itemCard.querySelectorAll('.food-nutrient-row').forEach((row) => {
+                const inputs = row.querySelectorAll('input');
+                const name = (inputs[0] && inputs[0].value || '').trim();
+                const amount = readOptionalNumber(inputs[1] && inputs[1].value);
+                if (name && amount !== undefined) micros[name] = amount;
+            });
+            items.push({
+                food_name: (itemCard.querySelector('.food-name').value || '').trim(),
+                serving_size: readOptionalNumber(itemCard.querySelector('.food-serving-size').value),
+                serving_unit: (itemCard.querySelector('.food-serving-unit').value || '').trim(),
+                calories: readOptionalNumber(itemCard.querySelector('.food-calories').value),
+                protein_g: readOptionalNumber(itemCard.querySelector('.food-protein').value),
+                carbs_g: readOptionalNumber(itemCard.querySelector('.food-carbs').value),
+                fat_g: readOptionalNumber(itemCard.querySelector('.food-fat').value),
+                notes: (itemCard.querySelector('.food-notes').value || '').trim(),
+                micronutrients: micros
+            });
+        });
+        meals.push({
+            meal_type: card.querySelector('.food-meal-type').value,
+            time: card.querySelector('.food-meal-time').value,
+            hunger_score_before: readOptionalNumber(card.querySelector('.food-hunger').value),
+            satiety_score_after: readOptionalNumber(card.querySelector('.food-fullness').value),
+            items
+        });
+    });
+    const symptoms = [];
+    document.querySelectorAll('#foodLogSymptoms .food-symptom').forEach((row) => {
+        symptoms.push({
+            symptom: (row.querySelector('.food-symptom-name').value || '').trim(),
+            severity: row.querySelector('.food-symptom-severity').value,
+            notes: (row.querySelector('.food-symptom-notes').value || '').trim()
+        });
+    });
+    return {
+        water_intake_ml: readOptionalNumber(document.getElementById('foodLogWater').value),
+        fasting_blood_glucose_mgdL: readOptionalNumber(document.getElementById('foodLogGlucose').value),
+        waking_weight_kg: readOptionalNumber(document.getElementById('foodLogWeight').value),
+        sleep_hours: readOptionalNumber(document.getElementById('foodLogSleep').value),
+        digestive_symptoms: symptoms,
+        meals
+    };
+}
+
+async function refreshFoodLogRecent() {
+    const box = document.getElementById('foodLogRecent');
+    if (!box || !currentUser) return;
+    try {
+        const result = await apiService.listFoodLogs(currentUser.username);
+        const days = (result && result.days) || [];
+        box.innerHTML = '';
+        if (!days.length) {
+            const empty = document.createElement('p');
+            empty.className = 'settings-note';
+            empty.textContent = 'No saved days yet.';
+            box.appendChild(empty);
+            return;
+        }
+        days.forEach((day) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn btn-link food-recent-btn';
+            const calories = day.total_calories != null ? ` · ${day.total_calories} kcal` : '';
+            button.textContent = `${day.date} · ${day.meal_count} meal${day.meal_count === 1 ? '' : 's'}${calories}`;
+            button.addEventListener('click', () => {
+                const dateEl = document.getElementById('foodLogDate');
+                if (dateEl) dateEl.value = day.date;
+                loadFoodLogForSelectedDate();
+            });
+            box.appendChild(button);
+        });
+    } catch (error) {
+        box.innerHTML = '';
+        const failed = document.createElement('p');
+        failed.className = 'settings-note';
+        failed.textContent = 'Could not load recent days.';
+        box.appendChild(failed);
+    }
+}
+
+async function loadFoodLogForSelectedDate() {
+    if (!currentUser) return;
+    const dateEl = document.getElementById('foodLogDate');
+    const date = dateEl && dateEl.value ? dateEl.value : todayInputDate();
+    if (dateEl && !dateEl.value) dateEl.value = date;
+    setFoodLogStatus('');
+    try {
+        const result = await apiService.getFoodLog(currentUser.username, date);
+        if (result && result.log) fillFoodLogForm(result.log);
+        else clearFoodLogForm(true);
+    } catch (error) {
+        setFoodLogStatus(error.message || 'Could not load this day.', true);
+    }
+}
+
+async function ensureFoodLogReady() {
+    const dateEl = document.getElementById('foodLogDate');
+    if (dateEl && !dateEl.value) dateEl.value = todayInputDate();
+    if (!foodLogReady) {
+        foodLogReady = true;
+        if (!document.querySelector('#foodLogMeals .food-meal')) addFoodMealRow();
+    }
+    await loadFoodLogForSelectedDate();
+    await refreshFoodLogRecent();
+}
+
+async function saveFoodLogDay() {
+    if (!currentUser) {
+        setFoodLogStatus('Log in before saving a food day.', true);
+        return;
+    }
+    const dateEl = document.getElementById('foodLogDate');
+    const date = dateEl && dateEl.value;
+    if (!date) {
+        setFoodLogStatus('Choose a date.', true);
+        return;
+    }
+    const button = document.getElementById('foodLogSave');
+    if (button) button.disabled = true;
+    try {
+        const result = await apiService.saveFoodLog(currentUser.username, date, readFoodLogForm());
+        if (result && result.log) fillFoodLogForm(result.log);
+        setFoodLogStatus('Saved. The AI companion can use this day in chat.');
+        showToast('Food log saved', 'success');
+        await refreshFoodLogRecent();
+    } catch (error) {
+        setFoodLogStatus(error.message || 'Could not save this day.', true);
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function deleteFoodLogDay() {
+    if (!currentUser) return;
+    const dateEl = document.getElementById('foodLogDate');
+    const date = dateEl && dateEl.value;
+    if (!date) return;
+    if (!window.confirm('Delete the food log for ' + date + '?')) return;
+    try {
+        await apiService.deleteFoodLog(currentUser.username, date);
+        clearFoodLogForm(true);
+        setFoodLogStatus('Deleted.');
+        await refreshFoodLogRecent();
+    } catch (error) {
+        setFoodLogStatus(error.message || 'Could not delete this day.', true);
     }
 }
 

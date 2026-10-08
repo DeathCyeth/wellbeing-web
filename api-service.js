@@ -31,6 +31,7 @@ class ApiService {
 
     async request(endpoint, options = {}) {
         const url = `${this.baseUrl}${endpoint}`;
+        const timeoutMs = options.timeoutMs || 10000;
         const config = {
             headers: {
                 'Content-Type': 'application/json',
@@ -38,6 +39,7 @@ class ApiService {
             },
             ...options,
         };
+        delete config.timeoutMs;
 
         // Convert body to JSON string if it's an object
         if (config.body && typeof config.body === 'object' && !(config.body instanceof FormData)) {
@@ -49,7 +51,7 @@ class ApiService {
             
             // Add timeout to prevent hanging
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Request timeout - server took too long to respond')), 10000);
+                setTimeout(() => reject(new Error('Request timeout - server took too long to respond')), timeoutMs);
             });
             
             const fetchPromise = fetch(url, config);
@@ -145,11 +147,16 @@ class ApiService {
     }
 
     // User authentication
+    async getAuthOptions() {
+        return await this.request('/auth/options');
+    }
+
     async getUser(username, password) {
         try {
             const response = await this.request('/users/login', {
                 method: 'POST',
                 body: { username, password },
+                timeoutMs: 45000,
             });
             // Handle different response formats
             if (response.user) return response.user;
@@ -166,6 +173,7 @@ class ApiService {
             const response = await this.request('/users', {
                 method: 'POST',
                 body: userData,
+                timeoutMs: 45000,
             });
             return response;
         } catch (error) {
@@ -176,6 +184,29 @@ class ApiService {
             }
             throw error;
         }
+    }
+
+    async enrollTwoFactor({ username, setup_token, method, email, phone }) {
+        return await this.request('/users/2fa/enroll', {
+            method: 'POST',
+            timeoutMs: 45000,
+            body: { username, setup_token, method, email, phone },
+        });
+    }
+
+    async verifyTwoFactor({ challenge_id, code }) {
+        return await this.request('/users/2fa/verify', {
+            method: 'POST',
+            body: { challenge_id, code },
+        });
+    }
+
+    async resendTwoFactor(challengeId) {
+        return await this.request('/users/2fa/resend', {
+            method: 'POST',
+            timeoutMs: 45000,
+            body: { challenge_id: challengeId },
+        });
     }
 
     async getUserByUsername(username) {
@@ -194,6 +225,27 @@ class ApiService {
     }
 
     // Preferences (Likes/Dislikes)
+    async listFoodLogs(username) {
+        return await this.request(`/users/${encodeURIComponent(username)}/food-logs`);
+    }
+
+    async getFoodLog(username, date) {
+        return await this.request(`/users/${encodeURIComponent(username)}/food-logs/${encodeURIComponent(date)}`);
+    }
+
+    async saveFoodLog(username, date, payload) {
+        return await this.request(`/users/${encodeURIComponent(username)}/food-logs/${encodeURIComponent(date)}`, {
+            method: 'PUT',
+            body: payload
+        });
+    }
+
+    async deleteFoodLog(username, date) {
+        return await this.request(`/users/${encodeURIComponent(username)}/food-logs/${encodeURIComponent(date)}`, {
+            method: 'DELETE'
+        });
+    }
+
     async getLikesDislikes(username) {
         try {
             return await this.request(`/users/${username}/preferences`);
