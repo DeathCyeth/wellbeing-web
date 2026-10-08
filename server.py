@@ -2226,11 +2226,10 @@ def create_user():
             }
         ), 403
 
-    method, destination = None, None
+    method, destination, contact_error = _parse_two_factor_contact(data)
+    if contact_error:
+        return jsonify({"error": contact_error}), 400
     if _two_factor_enforced():
-        method, destination, contact_error = _parse_two_factor_contact(data)
-        if contact_error:
-            return jsonify({"error": contact_error}), 400
         channel_error = _two_factor_channel_error(method)
         if channel_error and not _two_factor_dev_echo():
             return jsonify({"error": channel_error}), 503

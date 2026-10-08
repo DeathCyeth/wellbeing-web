@@ -1,5 +1,5 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '6.4';
+window.WELLBEING_APP_JS_VERSION = '6.5';
 
 var ONBOARDING_START_TOKEN = '__ONBOARDING_START__';
 var userOnboardingActive = false;
@@ -340,20 +340,24 @@ function applyChannelRadios(emailId, smsId, noteId) {
     const note = document.getElementById(noteId);
     const emailOn = authOptions.email !== false;
     const smsOn = authOptions.sms !== false;
+    const anyOn = emailOn || smsOn;
     if (emailRadio) {
-        emailRadio.disabled = !emailOn;
-        if (!emailOn) emailRadio.checked = false;
+        emailRadio.disabled = anyOn && !emailOn;
+        if (emailRadio.disabled) emailRadio.checked = false;
     }
     if (smsRadio) {
-        smsRadio.disabled = !smsOn;
-        if (!smsOn) smsRadio.checked = false;
+        smsRadio.disabled = anyOn && !smsOn;
+        if (smsRadio.disabled) smsRadio.checked = false;
     }
     if (emailOn && emailRadio && !(smsRadio && smsRadio.checked)) emailRadio.checked = true;
     if (!emailOn && smsOn && smsRadio) smsRadio.checked = true;
+    if (!anyOn && emailRadio && !emailRadio.checked && !(smsRadio && smsRadio.checked)) {
+        emailRadio.checked = true;
+    }
     if (note) {
-        note.textContent = (!emailOn && !smsOn)
-            ? 'Sign-in codes are not turned on for this server yet. Email needs the mail settings, and text needs Twilio.'
-            : '';
+        note.textContent = anyOn
+            ? ''
+            : 'Choose email or a text message. A code is sent once that option is turned on for the site.';
     }
 }
 
@@ -368,15 +372,8 @@ async function loadAuthOptions() {
     }
     applyChannelRadios('registerMethodEmail', 'registerMethodSms', 'registerChannelNote');
     updateRegisterContactFields();
-    const codesOn = authOptions.email !== false || authOptions.sms !== false;
     const codeFields = document.getElementById('registerTwoFactorFields');
-    if (codeFields) codeFields.style.display = codesOn ? '' : 'none';
-    if (!codesOn) {
-        const emailGroup = document.getElementById('registerEmailGroup');
-        const phoneGroup = document.getElementById('registerPhoneGroup');
-        if (emailGroup) emailGroup.style.display = 'none';
-        if (phoneGroup) phoneGroup.style.display = 'none';
-    }
+    if (codeFields) codeFields.style.display = '';
 }
 
 function twoFactorHintText(payload) {
@@ -524,15 +521,14 @@ async function handleRegister() {
         return;
     }
 
-    const channelsOn = authOptions.email !== false || authOptions.sms !== false;
     const method = selectedRadioValue('registerTwoFactor');
     const email = (document.getElementById('registerEmail').value || '').trim();
     const phone = (document.getElementById('registerPhone').value || '').trim();
-    if (channelsOn && method === 'email' && !email) {
+    if (method !== 'sms' && !email) {
         errorDiv.textContent = 'Enter the email address that should receive your sign-in code.';
         return;
     }
-    if (channelsOn && method === 'sms' && !phone) {
+    if (method === 'sms' && !phone) {
         errorDiv.textContent = 'Enter the mobile number that should receive your sign-in code.';
         return;
     }
