@@ -1777,9 +1777,21 @@ def _two_factor_dev_echo():
     return (os.environ.get("TWO_FACTOR_DEV_ECHO") or "").strip().lower() in ("1", "true", "yes")
 
 
+def _two_factor_switched_on():
+    return (os.environ.get("TWO_FACTOR_ENABLED") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _two_factor_email_offered():
+    return _two_factor_dev_echo() or (_two_factor_switched_on() and _two_factor_email_ready())
+
+
+def _two_factor_sms_offered():
+    return _two_factor_dev_echo() or (_two_factor_switched_on() and _two_factor_sms_ready())
+
+
 def _two_factor_enforced():
-    """Require a code only when email or text can actually send one."""
-    return _two_factor_email_ready() or _two_factor_sms_ready() or _two_factor_dev_echo()
+    """Require a code only when TWO_FACTOR_ENABLED is on and email or text can actually send one."""
+    return _two_factor_email_offered() or _two_factor_sms_offered()
 
 
 def _two_factor_channel_error(method):
@@ -2011,8 +2023,8 @@ def auth_options():
     return jsonify(
         {
             "password_rules": PASSWORD_RULES_TEXT,
-            "email": _two_factor_email_ready() or _two_factor_dev_echo(),
-            "sms": _two_factor_sms_ready() or _two_factor_dev_echo(),
+            "email": _two_factor_email_offered(),
+            "sms": _two_factor_sms_offered(),
         }
     )
 
@@ -2057,8 +2069,8 @@ def login():
                 "two_factor_setup_required": True,
                 "username": row[0],
                 "setup_token": _make_setup_token(row[0]),
-                "email": _two_factor_email_ready() or _two_factor_dev_echo(),
-                "sms": _two_factor_sms_ready() or _two_factor_dev_echo(),
+                "email": _two_factor_email_offered(),
+                "sms": _two_factor_sms_offered(),
             }
         )
     try:
@@ -2226,10 +2238,11 @@ def create_user():
             }
         ), 403
 
-    method, destination, contact_error = _parse_two_factor_contact(data)
-    if contact_error:
-        return jsonify({"error": contact_error}), 400
+    method, destination = None, None
     if _two_factor_enforced():
+        method, destination, contact_error = _parse_two_factor_contact(data)
+        if contact_error:
+            return jsonify({"error": contact_error}), 400
         channel_error = _two_factor_channel_error(method)
         if channel_error and not _two_factor_dev_echo():
             return jsonify({"error": channel_error}), 503

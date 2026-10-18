@@ -79,7 +79,7 @@
                         <label for="registerConfirmPassword">Confirm Password</label>
                         <input type="password" id="registerConfirmPassword" required autocomplete="new-password" minlength="8">
                     </div>
-                    <fieldset id="registerTwoFactorFields" class="form-group" style="border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">
+                    <fieldset id="registerTwoFactorFields" class="form-group" style="display: none; border: 1px solid var(--border-color); border-radius: 8px; padding: 12px;">
                         <legend style="padding: 0 6px;">Sign-in code (choose one)</legend>
                         <label style="display: block; margin-bottom: 8px;">
                             <input type="radio" name="registerTwoFactor" id="registerMethodEmail" value="email" checked> Email
@@ -89,7 +89,7 @@
                         </label>
                         <p id="registerChannelNote" style="margin: 8px 0 0; font-size: 0.85rem; color: var(--text-light);"></p>
                     </fieldset>
-                    <div class="form-group" id="registerEmailGroup">
+                    <div class="form-group" id="registerEmailGroup" style="display: none;">
                         <label for="registerEmail">Email</label>
                         <input type="email" id="registerEmail" autocomplete="email" placeholder="you@example.com">
                     </div>
@@ -406,7 +406,7 @@
     </div>
 
     <script src="api-service.js?v=5.1"></script>
-    <script src="app.js?v=6.5"></script>
+    <script src="app.js?v=6.6"></script>
     <script>
         // Show which site we're on (so tablet users can confirm same URL as desktop)
         (function () {

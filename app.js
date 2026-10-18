@@ -1,5 +1,5 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '6.5';
+window.WELLBEING_APP_JS_VERSION = '6.6';
 
 var ONBOARDING_START_TOKEN = '__ONBOARDING_START__';
 var userOnboardingActive = false;
@@ -9,7 +9,7 @@ var userOnboardingKickoffStarted = false;
 let currentUser = null;
 let pendingTwoFactor = null;
 let pendingTwoFactorSetup = null;
-let authOptions = { email: true, sms: true };
+let authOptions = { email: false, sms: false };
 
 // AI Conversation history - stores conversation for current session
 let aiConversationHistory = [];
@@ -370,10 +370,18 @@ async function loadAuthOptions() {
     } catch (e) {
         console.warn('Could not load sign-in options:', e);
     }
-    applyChannelRadios('registerMethodEmail', 'registerMethodSms', 'registerChannelNote');
-    updateRegisterContactFields();
+    const codesOn = authOptions.email === true || authOptions.sms === true;
     const codeFields = document.getElementById('registerTwoFactorFields');
-    if (codeFields) codeFields.style.display = '';
+    if (codeFields) codeFields.style.display = codesOn ? '' : 'none';
+    if (codesOn) {
+        applyChannelRadios('registerMethodEmail', 'registerMethodSms', 'registerChannelNote');
+        updateRegisterContactFields();
+    } else {
+        const emailGroup = document.getElementById('registerEmailGroup');
+        const phoneGroup = document.getElementById('registerPhoneGroup');
+        if (emailGroup) emailGroup.style.display = 'none';
+        if (phoneGroup) phoneGroup.style.display = 'none';
+    }
 }
 
 function twoFactorHintText(payload) {
@@ -521,14 +529,15 @@ async function handleRegister() {
         return;
     }
 
-    const method = selectedRadioValue('registerTwoFactor');
-    const email = (document.getElementById('registerEmail').value || '').trim();
-    const phone = (document.getElementById('registerPhone').value || '').trim();
-    if (method !== 'sms' && !email) {
+    const codesOn = authOptions.email === true || authOptions.sms === true;
+    const method = codesOn ? selectedRadioValue('registerTwoFactor') : '';
+    const email = codesOn ? (document.getElementById('registerEmail').value || '').trim() : '';
+    const phone = codesOn ? (document.getElementById('registerPhone').value || '').trim() : '';
+    if (codesOn && method !== 'sms' && !email) {
         errorDiv.textContent = 'Enter the email address that should receive your sign-in code.';
         return;
     }
-    if (method === 'sms' && !phone) {
+    if (codesOn && method === 'sms' && !phone) {
         errorDiv.textContent = 'Enter the mobile number that should receive your sign-in code.';
         return;
     }
