@@ -1,5 +1,5 @@
 // Main Application Logic
-window.WELLBEING_APP_JS_VERSION = '6.6';
+window.WELLBEING_APP_JS_VERSION = '6.9';
 
 var ONBOARDING_START_TOKEN = '__ONBOARDING_START__';
 var userOnboardingActive = false;
@@ -961,10 +961,31 @@ function addFoodItemRow(list, item) {
     unit.className = 'food-serving-unit';
     unit.placeholder = 'cup, g, piece';
     unit.value = item.serving_unit || '';
+    const portion = document.createElement('select');
+    portion.className = 'food-portion';
+    portion.style.display = 'none';
+    const unitField = foodField('Unit', unit);
+    unitField.appendChild(portion);
     main.appendChild(foodField('Food', name));
     main.appendChild(foodField('Amount', size));
-    main.appendChild(foodField('Unit', unit));
+    main.appendChild(unitField);
     main.appendChild(foodRemoveButton(() => card.remove()));
+    const lookup = document.createElement('div');
+    lookup.className = 'food-lookup';
+    const lookupBtn = document.createElement('button');
+    lookupBtn.type = 'button';
+    lookupBtn.className = 'btn btn-link food-lookup-btn';
+    lookupBtn.textContent = 'Find nutrition';
+    lookupBtn.addEventListener('click', () => lookupFoodNutrition(card, false));
+    const lookupStatus = document.createElement('span');
+    lookupStatus.className = 'food-lookup-status';
+    lookup.appendChild(lookupBtn);
+    lookup.appendChild(lookupStatus);
+    const lookupResults = document.createElement('div');
+    lookupResults.className = 'food-lookup-results';
+    const link = document.createElement('div');
+    link.className = 'food-link';
+    link.style.display = 'none';
     const macros = document.createElement('div');
     macros.className = 'food-item-macros';
     const calories = foodNumberInput(item.calories, '1', 20000);
@@ -994,11 +1015,235 @@ function addFoodItemRow(list, item) {
     addNutrient.textContent = 'Add nutrient';
     addNutrient.addEventListener('click', () => addFoodNutrientRow(nutrients));
     card.appendChild(main);
+    card.appendChild(lookup);
+    card.appendChild(lookupResults);
+    card.appendChild(link);
     card.appendChild(macros);
     card.appendChild(foodField('Notes', notes));
     card.appendChild(nutrients);
     card.appendChild(addNutrient);
     list.appendChild(card);
+
+    name.addEventListener('change', () => {
+        const hasNumbers = [calories, protein, carbs, fat].some((el) => el.value !== '');
+        if (!card.foodNutrition && !hasNumbers) lookupFoodNutrition(card, true);
+    });
+    size.addEventListener('input', () => {
+        if (card.foodNutrition && readOptionalNumber(size.value) !== undefined) applyFoodNutrition(card);
+    });
+    portion.addEventListener('change', () => applyFoodNutrition(card));
+
+    if (item.nutrition_source && FOOD_SOURCE_LABELS[item.nutrition_source] && item.per_100g && item.grams_per_unit) {
+        card.foodNutrition = {
+            source: item.nutrition_source,
+            food_id: item.food_id || '',
+            match: item.nutrition_match || item.food_name || '',
+            per_100g: item.per_100g
+        };
+        setFoodPortions(card, [], item.serving_unit || 'serving', item.grams_per_unit);
+        showFoodLink(card);
+    }
+}
+
+const FOOD_SOURCE_LABELS = { usda: 'USDA FoodData Central', off: 'Open Food Facts' };
+const FOOD_SOURCE_SHORT = { usda: 'USDA', off: 'Open Food Facts' };
+const FOOD_BASE_PORTIONS = [{ label: 'g', grams: 1 }, { label: 'oz', grams: 28.3495 }];
+const FOOD_LOOKUP_NUTRIENTS = ['fiber_g', 'sugars_g', 'sodium_mg'];
+
+function foodPortionUnit(label) {
+    const unit = String(label || '').trim().replace(/^1\s+/, '');
+    const words = unit.replace(/\([^)]*\)/g, '');
+    return /[A-Z]/.test(words) && words === words.toUpperCase() ? unit.toLowerCase() : unit;
+}
+
+function setFoodPortions(card, servings, selectedUnit, selectedGrams) {
+    const select = card.querySelector('.food-portion');
+    select.innerHTML = '';
+    const options = [];
+    const seen = new Set();
+    (servings || []).concat(FOOD_BASE_PORTIONS).forEach((portion) => {
+        const unit = foodPortionUnit(portion.label);
+        if (!unit || seen.has(unit.toLowerCase()) || !(portion.grams > 0)) return;
+        seen.add(unit.toLowerCase());
+        options.push({ unit, grams: portion.grams });
+    });
+    const wanted = foodPortionUnit(selectedUnit);
+    if (wanted && !seen.has(wanted.toLowerCase()) && selectedGrams > 0) {
+        options.unshift({ unit: wanted, grams: selectedGrams });
+    }
+    options.forEach((portion) => {
+        const option = document.createElement('option');
+        option.value = portion.unit;
+        option.dataset.grams = String(portion.grams);
+        const isBase = FOOD_BASE_PORTIONS.some((base) => base.label === portion.unit);
+        const showsWeight = /\d\s*(g|ml)\b/i.test(portion.unit);
+        option.textContent = isBase || showsWeight ? portion.unit : `${portion.unit} (${Math.round(portion.grams * 10) / 10} g)`;
+        select.appendChild(option);
+    });
+    const match = options.find((portion) => portion.unit.toLowerCase() === (wanted || '').toLowerCase());
+    select.value = match ? match.unit : (options[0] ? options[0].unit : '');
+    select.style.display = '';
+    const unitInput = card.querySelector('.food-serving-unit');
+    unitInput.value = select.value;
+    unitInput.style.display = 'none';
+}
+
+function setFoodNutrient(card, key, amount) {
+    const container = card.querySelector('.food-nutrients');
+    const existing = Array.from(container.querySelectorAll('.food-nutrient-row')).find((row) => {
+        const input = row.querySelector('input');
+        return input && input.value.trim() === key;
+    });
+    if (existing) existing.querySelectorAll('input')[1].value = amount;
+    else addFoodNutrientRow(container, key, amount);
+}
+
+function applyFoodNutrition(card) {
+    const link = card.foodNutrition;
+    const option = card.querySelector('.food-portion').selectedOptions[0];
+    if (!link || !option) return;
+    const sizeEl = card.querySelector('.food-serving-size');
+    let amount = readOptionalNumber(sizeEl.value);
+    if (amount === undefined) {
+        amount = 1;
+        sizeEl.value = '1';
+    }
+    const grams = Number(option.dataset.grams) || 0;
+    card.querySelector('.food-serving-unit').value = option.value;
+    link.grams_per_unit = grams;
+    const factor = (amount * grams) / 100;
+    const per = link.per_100g || {};
+    const round1 = (value) => Math.round(value * factor * 10) / 10;
+    if (per.calories != null) card.querySelector('.food-calories').value = Math.round(per.calories * factor);
+    if (per.protein_g != null) card.querySelector('.food-protein').value = round1(per.protein_g);
+    if (per.carbs_g != null) card.querySelector('.food-carbs').value = round1(per.carbs_g);
+    if (per.fat_g != null) card.querySelector('.food-fat').value = round1(per.fat_g);
+    FOOD_LOOKUP_NUTRIENTS.forEach((key) => {
+        if (per[key] != null) setFoodNutrient(card, key, key === 'sodium_mg' ? Math.round(per[key] * factor) : round1(per[key]));
+    });
+}
+
+function showFoodLink(card) {
+    const box = card.querySelector('.food-link');
+    const link = card.foodNutrition;
+    box.innerHTML = '';
+    if (!link) {
+        box.style.display = 'none';
+        return;
+    }
+    const text = document.createElement('span');
+    text.textContent = `Numbers from ${FOOD_SOURCE_LABELS[link.source]}: ${link.match}. Change the amount or unit and they update. You can still edit them.`;
+    const unlink = document.createElement('button');
+    unlink.type = 'button';
+    unlink.className = 'btn btn-link';
+    unlink.textContent = 'Unlink';
+    unlink.addEventListener('click', () => {
+        card.foodNutrition = null;
+        const unitInput = card.querySelector('.food-serving-unit');
+        const select = card.querySelector('.food-portion');
+        unitInput.style.display = '';
+        select.style.display = 'none';
+        showFoodLink(card);
+    });
+    box.appendChild(text);
+    box.appendChild(unlink);
+    box.style.display = '';
+}
+
+async function pickFoodResult(card, result) {
+    const status = card.querySelector('.food-lookup-status');
+    const results = card.querySelector('.food-lookup-results');
+    results.innerHTML = '';
+    let servings = Array.isArray(result.servings) ? result.servings : [];
+    if (result.source === 'off' && !servings.length) {
+        status.textContent = 'Getting the serving size…';
+        try {
+            const detail = await apiService.getFoodServings(result.id);
+            servings = (detail && detail.servings) || [];
+        } catch (e) {
+            servings = [];
+        }
+    }
+    status.textContent = '';
+    const nameEl = card.querySelector('.food-name');
+    if (!nameEl.value.trim()) nameEl.value = result.name;
+    card.foodNutrition = {
+        source: result.source,
+        food_id: result.id,
+        match: result.brand ? `${result.name} (${result.brand})` : result.name,
+        per_100g: result.per_100g || {}
+    };
+    const typedUnit = card.querySelector('.food-serving-unit').value.trim().toLowerCase();
+    let unit;
+    if (['g', 'gram', 'grams'].includes(typedUnit)) unit = 'g';
+    else if (['oz', 'ounce', 'ounces'].includes(typedUnit)) unit = 'oz';
+    else unit = servings.length ? foodPortionUnit(servings[0].label) : 'g';
+    const sizeEl = card.querySelector('.food-serving-size');
+    if (readOptionalNumber(sizeEl.value) === undefined) sizeEl.value = unit === 'g' ? '100' : '1';
+    setFoodPortions(card, servings, unit, unit === 'g' ? 1 : null);
+    showFoodLink(card);
+    applyFoodNutrition(card);
+}
+
+async function lookupFoodNutrition(card, automatic) {
+    const query = card.querySelector('.food-name').value.trim();
+    const status = card.querySelector('.food-lookup-status');
+    const results = card.querySelector('.food-lookup-results');
+    if (query.length < 2) {
+        if (!automatic) status.textContent = 'Type the food name first.';
+        return;
+    }
+    const token = (card.foodLookupToken || 0) + 1;
+    card.foodLookupToken = token;
+    results.innerHTML = '';
+    status.textContent = 'Searching USDA and Open Food Facts…';
+    let data;
+    try {
+        data = await apiService.searchFoods(query);
+    } catch (e) {
+        if (card.foodLookupToken === token) {
+            status.textContent = 'Nutrition lookup is not available right now. You can still type the numbers.';
+        }
+        return;
+    }
+    if (card.foodLookupToken !== token) return;
+    const found = (data && data.results) || [];
+    const missing = (data && data.unavailable) || [];
+    if (!found.length) {
+        status.textContent = missing.length
+            ? 'Nutrition lookup is not available right now. You can still type the numbers.'
+            : 'No matches. Try a simpler name, or type the numbers yourself.';
+        return;
+    }
+    status.textContent = 'Pick the closest match to fill in the numbers.'
+        + (missing.length ? ` (${missing.join(' and ')} did not answer.)` : '');
+    found.forEach((result) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'food-lookup-option';
+        const title = document.createElement('span');
+        title.textContent = result.name;
+        const meta = document.createElement('small');
+        const per = result.per_100g || {};
+        meta.textContent = [
+            result.brand,
+            FOOD_SOURCE_SHORT[result.source],
+            per.calories != null ? `${Math.round(per.calories)} kcal per 100 g` : ''
+        ].filter(Boolean).join(' · ');
+        button.appendChild(title);
+        button.appendChild(meta);
+        button.addEventListener('click', () => pickFoodResult(card, result));
+        results.appendChild(button);
+    });
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'btn btn-link';
+    close.textContent = 'None of these';
+    close.addEventListener('click', () => {
+        results.innerHTML = '';
+        status.textContent = '';
+    });
+    results.appendChild(close);
 }
 
 function addFoodMealRow(meal) {
@@ -1144,7 +1389,16 @@ function readFoodLogForm() {
                 const amount = readOptionalNumber(inputs[1] && inputs[1].value);
                 if (name && amount !== undefined) micros[name] = amount;
             });
+            const link = itemCard.foodNutrition;
+            const sourceFields = link ? {
+                food_id: link.food_id,
+                nutrition_source: link.source,
+                nutrition_match: link.match,
+                grams_per_unit: link.grams_per_unit,
+                per_100g: link.per_100g
+            } : {};
             items.push({
+                ...sourceFields,
                 food_name: (itemCard.querySelector('.food-name').value || '').trim(),
                 serving_size: readOptionalNumber(itemCard.querySelector('.food-serving-size').value),
                 serving_unit: (itemCard.querySelector('.food-serving-unit').value || '').trim(),

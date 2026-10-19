@@ -475,6 +475,7 @@ body {
 .food-meal input,
 .food-meal select,
 .food-item input,
+.food-item select,
 .food-symptom input,
 .food-symptom select {
     width: 100%;
@@ -489,6 +490,76 @@ body {
 .food-remove {
     align-self: end;
     padding: 8px 10px;
+}
+
+.food-lookup {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.food-lookup-btn {
+    padding: 4px 0;
+}
+
+.food-lookup-status {
+    font-size: 0.85rem;
+    color: var(--text-light);
+}
+
+.food-lookup-results {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.food-lookup-results:not(:empty) {
+    margin-top: 6px;
+}
+
+.food-lookup-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--card-bg);
+    color: var(--text-color);
+    font: inherit;
+    cursor: pointer;
+}
+
+.food-lookup-option:hover,
+.food-lookup-option:focus-visible {
+    background: var(--hover-row);
+    border-color: var(--primary-color);
+}
+
+.food-lookup-option small {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-light);
+}
+
+.food-link {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--accent-surface);
+    font-size: 0.85rem;
+}
+
+.food-link .btn-link {
+    padding: 0;
 }
 
 .food-nutrient-row {

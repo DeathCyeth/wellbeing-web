@@ -26,6 +26,8 @@ import base64
 import smtplib
 import ssl
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
 from datetime import datetime
 
@@ -3433,6 +3435,21 @@ def finish_patient_onboarding(username):
 
 FOOD_LOG_MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack", "pre-workout", "post-workout")
 FOOD_LOG_SEVERITY = ("none", "mild", "moderate", "severe")
+FOOD_NUTRITION_SOURCES = {"usda": "USDA FoodData Central", "off": "Open Food Facts"}
+FOOD_PER_100G_LIMITS = {
+    "calories": 1000,
+    "protein_g": 100,
+    "carbs_g": 100,
+    "fat_g": 100,
+    "fiber_g": 100,
+    "sugars_g": 100,
+    "sodium_mg": 100000,
+}
+FOOD_SEARCH_USER_AGENT = "WellbeingCompanion/1.0 (food log nutrition lookup)"
+FOOD_SEARCH_CACHE_SECONDS = 6 * 3600
+FOOD_SEARCH_CACHE_MAX = 500
+_food_search_cache = {}
+_food_search_lock = threading.Lock()
 
 
 def _food_optional_number(value, maximum, as_int=False):
@@ -3481,11 +3498,28 @@ def _normalize_food_log(username, log_date, data, existing_log_id=None):
                 serving_size = 1
             serving_unit = _norm(item.get("serving_unit") or "serving")[:40] or "serving"
             cleaned = {
-                "food_id": _norm(item.get("food_id") or "")[:40] or secrets.token_hex(4),
+                "food_id": _norm(item.get("food_id") or "")[:60] or secrets.token_hex(4),
                 "food_name": food_name,
                 "serving_size": serving_size,
                 "serving_unit": serving_unit,
             }
+            source = _norm(item.get("nutrition_source") or "").lower()
+            if source in FOOD_NUTRITION_SOURCES:
+                cleaned["nutrition_source"] = source
+                match = _norm(item.get("nutrition_match") or "")[:160]
+                if match:
+                    cleaned["nutrition_match"] = match
+                grams = _food_optional_number(item.get("grams_per_unit"), 5000)
+                if grams:
+                    cleaned["grams_per_unit"] = grams
+                raw_per_100g = item.get("per_100g") if isinstance(item.get("per_100g"), dict) else {}
+                per_100g = {}
+                for key, maximum in FOOD_PER_100G_LIMITS.items():
+                    amount = _food_optional_number(raw_per_100g.get(key), maximum)
+                    if amount is not None:
+                        per_100g[key] = amount
+                if per_100g:
+                    cleaned["per_100g"] = per_100g
             for key, maximum, as_int in (
                 ("calories", 20000, True),
                 ("protein_g", 1000, False),
@@ -3662,11 +3696,243 @@ def _food_log_prompt_block(username):
                 piece = f"    - {item.get('food_name')} ({item.get('serving_size')} {item.get('serving_unit')})"
                 if item.get("calories") is not None:
                     piece += f", {item['calories']} kcal"
+                macro_bits = [
+                    f"{label} {item[key]} g"
+                    for key, label in (("protein_g", "P"), ("carbs_g", "C"), ("fat_g", "F"))
+                    if item.get(key) is not None
+                ]
+                if macro_bits:
+                    piece += " (" + ", ".join(macro_bits) + ")"
+                if item.get("nutrition_source") in FOOD_NUTRITION_SOURCES:
+                    piece += f" [values from {FOOD_NUTRITION_SOURCES[item['nutrition_source']]}]"
                 if item.get("notes"):
                     piece += f" — {item['notes']}"
                 lines.append(piece)
     text = "\n".join(lines)
     return text[:8000]
+
+
+def _food_cache_get(key):
+    with _food_search_lock:
+        hit = _food_search_cache.get(key)
+        if hit and time.time() - hit[0] < FOOD_SEARCH_CACHE_SECONDS:
+            return hit[1]
+    return None
+
+
+def _food_cache_put(key, value):
+    with _food_search_lock:
+        if len(_food_search_cache) >= FOOD_SEARCH_CACHE_MAX:
+            oldest = min(_food_search_cache, key=lambda k: _food_search_cache[k][0])
+            _food_search_cache.pop(oldest, None)
+        _food_search_cache[key] = (time.time(), value)
+
+
+def _food_fetch_json(url, body=None, timeout=8):
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"User-Agent": FOOD_SEARCH_USER_AGENT, "Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _food_per_100g(values):
+    cleaned = {}
+    for key, maximum in FOOD_PER_100G_LIMITS.items():
+        amount = _food_optional_number(values.get(key), maximum)
+        if amount is not None:
+            cleaned[key] = amount
+    return cleaned
+
+
+def _usda_food_results(query, limit):
+    api_key = (os.environ.get("FDC_API_KEY") or "").strip() or "DEMO_KEY"
+    url = "https://api.nal.usda.gov/fdc/v1/foods/search?api_key=" + urllib.parse.quote(api_key)
+    data = _food_fetch_json(url, {
+        "query": query,
+        "dataType": ["Foundation", "SR Legacy", "Survey (FNDDS)"],
+        "pageSize": limit,
+    })
+    results = []
+    for food in data.get("foods") or []:
+        values = {}
+        atwater_kcal = None
+        for nutrient in food.get("foodNutrients") or []:
+            number = str(nutrient.get("nutrientNumber") or "")
+            unit = str(nutrient.get("unitName") or "").upper()
+            value = nutrient.get("value")
+            if value is None:
+                continue
+            if number == "208" and unit == "KCAL":
+                values["calories"] = value
+            elif number in ("957", "958") and unit == "KCAL" and atwater_kcal is None:
+                atwater_kcal = value
+            elif number == "203":
+                values["protein_g"] = value
+            elif number == "205":
+                values["carbs_g"] = value
+            elif number == "204":
+                values["fat_g"] = value
+            elif number == "291":
+                values["fiber_g"] = value
+            elif number == "269":
+                values["sugars_g"] = value
+            elif number == "307" and unit == "MG":
+                values["sodium_mg"] = value
+        if "calories" not in values and atwater_kcal is not None:
+            values["calories"] = atwater_kcal
+        per_100g = _food_per_100g(values)
+        if "calories" not in per_100g:
+            continue
+        servings = []
+        seen = set()
+        for measure in food.get("foodMeasures") or []:
+            label = _norm(measure.get("disseminationText") or "")[:60]
+            grams = _food_optional_number(measure.get("gramWeight"), 5000)
+            if not label or not grams or label.lower() == "quantity not specified" or label in seen:
+                continue
+            seen.add(label)
+            servings.append({"label": label, "grams": grams})
+            if len(servings) >= 8:
+                break
+        results.append({
+            "source": "usda",
+            "id": f"usda:{food.get('fdcId')}",
+            "name": _norm(food.get("description") or "")[:160],
+            "brand": _norm(food.get("brandOwner") or "")[:80],
+            "per_100g": per_100g,
+            "servings": servings,
+        })
+    return results
+
+
+def _off_text(value):
+    if isinstance(value, dict):
+        value = value.get("en") or next(iter(value.values()), "")
+    if isinstance(value, list):
+        value = ", ".join(str(v) for v in value if v)
+    return _norm(value or "")
+
+
+def _off_food_results(query, limit):
+    url = "https://search.openfoodfacts.org/search?" + urllib.parse.urlencode({
+        "q": query,
+        "page_size": limit,
+        "fields": "code,product_name,brands,nutriments",
+    })
+    data = _food_fetch_json(url)
+    results = []
+    for hit in data.get("hits") or []:
+        code = re.sub(r"[^0-9A-Za-z]", "", str(hit.get("code") or ""))[:40]
+        name = _off_text(hit.get("product_name"))[:160]
+        nutriments = hit.get("nutriments") or {}
+        if not code or not name:
+            continue
+        kcal = nutriments.get("energy-kcal_100g")
+        if kcal is None and nutriments.get("energy_100g") is not None:
+            try:
+                kcal = float(nutriments["energy_100g"]) / 4.184
+            except (TypeError, ValueError):
+                kcal = None
+        sodium_g = nutriments.get("sodium_100g")
+        try:
+            sodium_mg = float(sodium_g) * 1000 if sodium_g is not None else None
+        except (TypeError, ValueError):
+            sodium_mg = None
+        per_100g = _food_per_100g({
+            "calories": kcal,
+            "protein_g": nutriments.get("proteins_100g"),
+            "carbs_g": nutriments.get("carbohydrates_100g"),
+            "fat_g": nutriments.get("fat_100g"),
+            "fiber_g": nutriments.get("fiber_100g"),
+            "sugars_g": nutriments.get("sugars_100g"),
+            "sodium_mg": sodium_mg,
+        })
+        if "calories" not in per_100g:
+            continue
+        results.append({
+            "source": "off",
+            "id": f"off:{code}",
+            "name": name,
+            "brand": _off_text(hit.get("brands"))[:80],
+            "per_100g": per_100g,
+            "servings": [],
+        })
+    return results
+
+
+@app.route("/api/foods/search", methods=["GET"])
+def search_foods():
+    """Look up nutrition per 100 g from USDA FoodData Central and Open Food Facts."""
+    query = re.sub(r"\s+", " ", _norm(request.args.get("q") or ""))[:80]
+    if len(query) < 2:
+        return jsonify({"error": "Type at least 2 letters of the food name."}), 400
+    cache_key = "search:" + query.lower()
+    cached = _food_cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+    sources = (("usda", _usda_food_results), ("off", _off_food_results))
+    found = {}
+    unavailable = []
+    with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+        futures = {name: pool.submit(fetch, query, 8) for name, fetch in sources}
+        for name, future in futures.items():
+            try:
+                found[name] = future.result()
+            except Exception as e:
+                print(f"food search {name} error: {e}")
+                unavailable.append(FOOD_NUTRITION_SOURCES[name])
+    words = [w for w in re.split(r"[^a-z0-9]+", query.lower()) if w]
+
+    def closeness(item):
+        name = item["name"].lower()
+        name_words = re.split(r"[^a-z0-9]+", name)
+        all_words = name_words + re.split(r"[^a-z0-9]+", (item.get("brand") or "").lower())
+        missing = sum(1 for w in words if not any(nw.startswith(w) for nw in all_words))
+        leads = 0 if words and name_words and name_words[0].startswith(words[0]) else 1
+        return (missing, leads, item["source"] != "usda", len(name))
+
+    combined = found.get("usda", []) + found.get("off", [])
+    result = {
+        "query": query,
+        "results": sorted(combined, key=closeness),
+        "unavailable": unavailable,
+    }
+    if not unavailable:
+        _food_cache_put(cache_key, result)
+    return jsonify(result)
+
+
+@app.route("/api/foods/off/<code>", methods=["GET"])
+def open_food_facts_servings(code):
+    """Serving size for one Open Food Facts product (search results leave it out)."""
+    code = re.sub(r"[^0-9A-Za-z]", "", code or "")[:40]
+    if not code:
+        return jsonify({"servings": []})
+    cache_key = "off:" + code
+    cached = _food_cache_get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+    try:
+        data = _food_fetch_json(
+            f"https://world.openfoodfacts.org/api/v2/product/{code}"
+            "?fields=serving_size,serving_quantity,serving_quantity_unit"
+        )
+    except Exception as e:
+        print(f"open food facts product error: {e}")
+        return jsonify({"servings": []})
+    product = data.get("product") or {}
+    servings = []
+    grams = _food_optional_number(product.get("serving_quantity"), 5000)
+    unit = str(product.get("serving_quantity_unit") or "g").lower()
+    if grams and unit in ("g", "ml"):
+        label = _norm(product.get("serving_size") or "")[:60] or f"1 serving ({grams:g} {unit})"
+        servings.append({"label": label, "grams": grams})
+    result = {"servings": servings}
+    _food_cache_put(cache_key, result)
+    return jsonify(result)
 
 
 @app.route("/api/users/<username>/food-logs", methods=["GET"])

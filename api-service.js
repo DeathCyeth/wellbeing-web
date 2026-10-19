@@ -246,6 +246,15 @@ class ApiService {
         });
     }
 
+    async searchFoods(query) {
+        return await this.request(`/foods/search?q=${encodeURIComponent(query)}`, { timeoutMs: 20000 });
+    }
+
+    async getFoodServings(foodId) {
+        const code = String(foodId || '').replace(/^off:/, '');
+        return await this.request(`/foods/off/${encodeURIComponent(code)}`, { timeoutMs: 12000 });
+    }
+
     async getLikesDislikes(username) {
         try {
             return await this.request(`/users/${username}/preferences`);
