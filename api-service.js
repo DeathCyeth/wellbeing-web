@@ -345,6 +345,7 @@ class ApiService {
         return await this.request(`/users/${username}/onboarding/finish`, {
             method: 'POST',
             body: { conversation_history: conversationHistory || [] },
+            timeoutMs: 240000,
         });
     }
 

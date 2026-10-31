@@ -3420,11 +3420,8 @@ def finish_patient_onboarding(username):
     uname = _norm(username or "").lower()
     if not uname:
         return jsonify({"error": "Username required"}), 400
-    if not OPENAI_AVAILABLE:
-        return jsonify({"error": "OpenAI not configured."}), 503
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return jsonify({"error": "OpenAI API key not configured."}), 503
+    if not _ai_available():
+        return jsonify({"error": AI_NOT_CONFIGURED_MESSAGE}), 503
 
     data = request.get_json() or {}
     history = data.get("conversation_history") or []
@@ -3441,11 +3438,8 @@ def finish_patient_onboarding(username):
         return jsonify({"error": "User not found"}), 404
 
     try:
-        client = OpenAI(api_key=api_key)
-        onboarding_model = _openai_advice_model_id(False)
-        completion = client.chat.completions.create(
-            model=onboarding_model,
-            messages=[
+        raw, _model = _ai_chat(
+            [
                 {
                     "role": "system",
                     "content": (
@@ -3462,9 +3456,12 @@ def finish_patient_onboarding(username):
                 },
                 {"role": "user", "content": transcript[:12000]},
             ],
-            **_openai_chat_limits(onboarding_model, 600, 0.2),
+            max_tokens=600,
+            temperature=0.2,
+            json_mode=True,
+            openai_model=_openai_advice_model_id(False),
         )
-        raw = (completion.choices[0].message.content or "").strip()
+        raw = (raw or "").strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
@@ -4119,6 +4116,74 @@ def _ai_engine_settings():
     return engine_url.rstrip('/'), engine_key, timeout_seconds
 
 
+def _ai_engine_configured():
+    return bool((os.environ.get('AI_ENGINE_URL') or '').strip())
+
+
+def _ai_available():
+    return _ai_engine_configured() or bool(OPENAI_AVAILABLE and os.environ.get('OPENAI_API_KEY'))
+
+
+AI_NOT_CONFIGURED_MESSAGE = "AI is not configured. Set AI_ENGINE_URL and AI_ENGINE_API_KEY (or OPENAI_API_KEY)."
+
+
+def _ai_chat(messages, *, max_tokens, temperature, json_mode=False, openai_model=None):
+    """Chat completion on the wellbeing AI engine when configured, else OpenAI. Returns (text, model)."""
+    if _ai_engine_configured():
+        engine_url, engine_key, timeout_seconds = _ai_engine_settings()
+        response = httpx.post(
+            engine_url + '/api/ai/complete',
+            json={
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "json": bool(json_mode),
+            },
+            headers={'X-Internal-Api-Key': engine_key},
+            timeout=httpx.Timeout(timeout_seconds),
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            payload = {}
+        if not response.is_success:
+            raise RuntimeError(f"AI engine error ({response.status_code}): {payload.get('error') or 'unavailable'}")
+        content = payload.get('content')
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("AI engine returned an empty response")
+        return content, payload.get('model') or ''
+
+    api_key = os.environ.get('OPENAI_API_KEY')
+    if not OPENAI_AVAILABLE or not api_key:
+        raise RuntimeError(AI_NOT_CONFIGURED_MESSAGE)
+    model = openai_model or _openai_advice_model_id(False)
+    extra = {"response_format": {"type": "json_object"}} if json_mode else {}
+    completion = OpenAI(api_key=api_key).chat.completions.create(
+        model=model,
+        messages=messages,
+        **extra,
+        **_openai_chat_limits(model, max_tokens, temperature),
+    )
+    return completion.choices[0].message.content or "", model
+
+
+def _user_age_sex(username):
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
+        run_execute(cursor, "SELECT age, sex FROM users WHERE LOWER(username)=?", (username,))
+        row = cursor.fetchone()
+        conn.close()
+    except Exception as e:
+        print(f"age/sex lookup error: {e}")
+        return None, ''
+    if not row:
+        return None, ''
+    return row[0], row[1] or ''
+
+
 def _proxy_advice_to_ai_engine(data):
     """Send a text advice request to the wellbeing AI engine (local Ollama RAG)."""
     question = _norm(data.get('question') or '')
@@ -4159,6 +4224,13 @@ def _proxy_advice_to_ai_engine(data):
     outbound = dict(data)
     outbound['request_id'] = request_id
     outbound['onboarding_interview'] = onboarding_interview
+    outbound['food_log_summary'] = _food_log_prompt_block(acting_username)
+    outbound['answer_feedback'] = _ai_rating_feedback_system_block(acting_username) or ''
+    age, sex = _user_age_sex(acting_username)
+    if age is not None and not outbound.get('age'):
+        outbound['age'] = age
+    if sex and not outbound.get('sex'):
+        outbound['sex'] = sex
     if question == ONBOARDING_START_TOKEN and not onboarding_interview:
         outbound['question'] = "Hello! I'm new here and would like a quick welcome chat to get started."
     try:
@@ -4250,12 +4322,13 @@ def get_ai_advice():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "A JSON request body is required"}), 400
-    # The engine is text-only; photo questions stay on the OpenAI vision path.
-    if (os.environ.get('AI_ENGINE_URL') or '').strip() and not _advice_request_has_image(data):
+    # Text questions use the engine's evidence (RAG) route; photo questions use
+    # the prompt below with a vision model via _ai_chat.
+    if _ai_engine_configured() and not _advice_request_has_image(data):
         return _proxy_advice_to_ai_engine(data)
 
-    if not OPENAI_AVAILABLE:
-        return jsonify({"error": "OpenAI not configured. Please install openai package and set OPENAI_API_KEY environment variable."}), 503
+    if not _ai_available():
+        return jsonify({"error": AI_NOT_CONFIGURED_MESSAGE}), 503
 
     question = data.get('question', '')
     user_name = data.get('user_name', 'User')
@@ -4290,12 +4363,7 @@ def get_ai_advice():
     if not question and not image:
         return jsonify({"error": "Question or image is required"}), 400
     question = question or "What do you see in this image?"
-    
-    # Get OpenAI API key from environment variable
-    api_key = os.environ.get('OPENAI_API_KEY')
-    if not api_key:
-        return jsonify({"error": "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."}), 503
-    
+
     try:
         # Build user profile medical information section (non-empty fields only)
         med = medical_info
@@ -4465,14 +4533,12 @@ Provide helpful, personalized advice that takes into account the user's preferen
                     has_image = True
                     break
         model = _openai_advice_model_id(has_image)
-        client = OpenAI(api_key=api_key)
-        completion = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            **_openai_chat_limits(model, 950, 0.35),
+        response_text, model = _ai_chat(
+            messages,
+            max_tokens=950,
+            temperature=0.35,
+            openai_model=model,
         )
-        
-        response_text = completion.choices[0].message.content
 
         all_pmids = []
         seen_p = set()
@@ -4512,7 +4578,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
 
     except Exception as e:
         err_msg = str(e)
-        print(f"OpenAI API error: {err_msg}")
+        print(f"AI advice error: {err_msg}")
         _insert_ai_chat_log(
             username=acting_username,
             display_name=_norm(user_name or ''),
@@ -4533,11 +4599,8 @@ Provide helpful, personalized advice that takes into account the user's preferen
 @app.route('/api/ai/nutrition-plan', methods=['POST'])
 def generate_nutrition_plan():
     """Generate a personalized nutrition plan for a patient using their recorded data."""
-    if not OPENAI_AVAILABLE:
-        return jsonify({"error": "OpenAI not configured."}), 503
-    api_key = os.environ.get('OPENAI_API_KEY')
-    if not api_key:
-        return jsonify({"error": "OpenAI API key not configured."}), 503
+    if not _ai_available():
+        return jsonify({"error": AI_NOT_CONFIGURED_MESSAGE}), 503
     data = request.get_json() or {}
     username = (data.get('username') or '').strip()
     patient_id = (data.get('patient_id') or '').strip()
@@ -4665,15 +4728,14 @@ Consistency: weight_loss_calories must stay below maintenance_calories. Avoid ex
 
 Return only valid JSON, no other text. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. Respect religious and cultural practices in Religion/Cultural background fields (e.g. halal, kosher, fasting, traditional cuisines). foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
 
-        client = OpenAI(api_key=api_key)
-        nutrition_model = _openai_nutrition_model_id()
-        completion = client.chat.completions.create(
-            model=nutrition_model,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            **_openai_chat_limits(nutrition_model, 1500, 0.35),
+        raw, _model = _ai_chat(
+            [{"role": "user", "content": prompt}],
+            max_tokens=1500,
+            temperature=0.35,
+            json_mode=True,
+            openai_model=_openai_nutrition_model_id(),
         )
-        raw = completion.choices[0].message.content or "{}"
+        raw = raw or "{}"
         validation_notes = list(est_notes or [])
         try:
             plan_data = json.loads(raw)
