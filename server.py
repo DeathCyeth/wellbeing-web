@@ -3110,13 +3110,18 @@ def _openai_chat_limits(model: str, max_tokens: int, temperature: float) -> dict
     GPT-5.6 defaults to medium reasoning, which rejects a non-default temperature
     and spends the token budget on hidden reasoning. Chat stays on
     reasoning_effort=none so replies stay fast and temperature still applies.
+
+    Those fields go through extra_body because the deployed openai package
+    (1.12) rejects them as direct keyword arguments.
     """
     mid = (model or "").lower()
     if mid.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4")):
         return {
-            "max_completion_tokens": max_tokens,
             "temperature": temperature,
-            "reasoning_effort": "none",
+            "extra_body": {
+                "max_completion_tokens": max_tokens,
+                "reasoning_effort": "none",
+            },
         }
     return {
         "max_tokens": max_tokens,
