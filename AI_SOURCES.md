@@ -29,9 +29,9 @@ Set optional environment variables on Render (or locally) to use that model inst
 
 | Variable | Replaces | Default if unset |
 |----------|----------|-------------------|
-| `OPENAI_ADVICE_MODEL` | Text-only AI chat (`/api/ai/advice`) | `gpt-3.5-turbo` |
+| `OPENAI_ADVICE_MODEL` | Text-only AI chat (`/api/ai/advice`) | `gpt-5.6-terra` |
 | `OPENAI_ADVICE_MODEL_VISION` | Same route when an image is attached | `gpt-4o-mini` |
-| `OPENAI_NUTRITION_MODEL` | Nutrition plan JSON (`/api/ai/nutrition-plan`) | `gpt-3.5-turbo` |
+| `OPENAI_NUTRITION_MODEL` | Nutrition plan JSON (`/api/ai/nutrition-plan`) | `gpt-5.6-terra` |
 
 Vision-capable fine-tunes are uncommon; if yours is text-only, leave `OPENAI_ADVICE_MODEL_VISION` unset so image threads still use `gpt-4o-mini`.
 

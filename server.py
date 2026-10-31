@@ -3069,19 +3069,59 @@ def tavily_web_search(query: str, max_results: int = 4):
         return None
 
 
+# gpt-3.5-turbo and its snapshots were shut down on 2026-10-23.
+# OpenAI's listed replacement is gpt-5.6-terra.
+_RETIRED_OPENAI_CHAT_MODELS = frozenset({
+    "gpt-3.5-turbo",
+    "gpt-3.5-turbo-0125",
+    "gpt-3.5-turbo-1106",
+    "gpt-3.5-turbo-0301",
+    "gpt-3.5-turbo-0613",
+    "gpt-3.5-turbo-16k",
+    "gpt-3.5-turbo-16k-0613",
+    "gpt-3.5-turbo-completions",
+})
+_DEFAULT_OPENAI_CHAT_MODEL = "gpt-5.6-terra"
+
+
+def _openai_model_from_env(env_name: str, default: str) -> str:
+    """Env override, unless it names a model OpenAI has already shut down."""
+    custom = (os.environ.get(env_name) or "").strip()
+    if not custom or custom in _RETIRED_OPENAI_CHAT_MODELS:
+        return default
+    return custom
+
+
 def _openai_advice_model_id(has_image: bool) -> str:
     """Chat model for /api/ai/advice. Override with fine-tuned IDs, e.g. ft:gpt-4o-mini:acme:custom:7q8m."""
     if has_image:
-        custom = (os.environ.get("OPENAI_ADVICE_MODEL_VISION") or "").strip()
-        return custom if custom else "gpt-4o-mini"
-    custom = (os.environ.get("OPENAI_ADVICE_MODEL") or "").strip()
-    return custom if custom else "gpt-3.5-turbo"
+        return _openai_model_from_env("OPENAI_ADVICE_MODEL_VISION", "gpt-4o-mini")
+    return _openai_model_from_env("OPENAI_ADVICE_MODEL", _DEFAULT_OPENAI_CHAT_MODEL)
 
 
 def _openai_nutrition_model_id() -> str:
     """Chat model for /api/ai/nutrition-plan."""
-    custom = (os.environ.get("OPENAI_NUTRITION_MODEL") or "").strip()
-    return custom if custom else "gpt-3.5-turbo"
+    return _openai_model_from_env("OPENAI_NUTRITION_MODEL", _DEFAULT_OPENAI_CHAT_MODEL)
+
+
+def _openai_chat_limits(model: str, max_tokens: int, temperature: float) -> dict:
+    """Sampling params the selected model still accepts.
+
+    GPT-5.6 defaults to medium reasoning, which rejects a non-default temperature
+    and spends the token budget on hidden reasoning. Chat stays on
+    reasoning_effort=none so replies stay fast and temperature still applies.
+    """
+    mid = (model or "").lower()
+    if mid.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4")):
+        return {
+            "max_completion_tokens": max_tokens,
+            "temperature": temperature,
+            "reasoning_effort": "none",
+        }
+    return {
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
 
 
 def _notify_literature_webhook(scope, pmid, added_by, note, patient_username):
@@ -3394,8 +3434,9 @@ def finish_patient_onboarding(username):
 
     try:
         client = OpenAI(api_key=api_key)
+        onboarding_model = _openai_advice_model_id(False)
         completion = client.chat.completions.create(
-            model=_openai_advice_model_id(False),
+            model=onboarding_model,
             messages=[
                 {
                     "role": "system",
@@ -3413,8 +3454,7 @@ def finish_patient_onboarding(username):
                 },
                 {"role": "user", "content": transcript[:12000]},
             ],
-            max_tokens=600,
-            temperature=0.2,
+            **_openai_chat_limits(onboarding_model, 600, 0.2),
         )
         raw = (completion.choices[0].message.content or "").strip()
         if raw.startswith("```"):
@@ -4261,8 +4301,7 @@ Provide helpful, personalized advice that takes into account the user's preferen
         completion = client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=950,
-            temperature=0.35
+            **_openai_chat_limits(model, 950, 0.35),
         )
         
         response_text = completion.choices[0].message.content
@@ -4459,12 +4498,12 @@ Consistency: weight_loss_calories must stay below maintenance_calories. Avoid ex
 Return only valid JSON, no other text. CRITICAL: Do not suggest or include ANY food from the patient's "Dislikes" list anywhere in the plan—not in meals, foods_include, or grocery lists. Use their likes when suggesting foods they might enjoy. Respect religious and cultural practices in Religion/Cultural background fields (e.g. halal, kosher, fasting, traditional cuisines). foods_avoid = medically relevant only (allergies, conditions, drug interactions)."""
 
         client = OpenAI(api_key=api_key)
+        nutrition_model = _openai_nutrition_model_id()
         completion = client.chat.completions.create(
-            model=_openai_nutrition_model_id(),
+            model=nutrition_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1500,
-            temperature=0.35,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            **_openai_chat_limits(nutrition_model, 1500, 0.35),
         )
         raw = completion.choices[0].message.content or "{}"
         validation_notes = list(est_notes or [])
