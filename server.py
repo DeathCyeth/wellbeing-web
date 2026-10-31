@@ -27,9 +27,12 @@ import smtplib
 import ssl
 import threading
 import time
+import math
 from concurrent.futures import ThreadPoolExecutor
 from email.message import EmailMessage
 from datetime import datetime
+
+import httpx
 
 
 def _norm(s):
@@ -4087,13 +4090,173 @@ def delete_food_log(username, log_date):
     return jsonify({"message": "Food log deleted"})
 
 
+def _ai_engine_settings():
+    """Validated (base_url, api_key, timeout_seconds) for the wellbeing AI engine."""
+    engine_url = (os.environ.get('AI_ENGINE_URL') or '').strip()
+    engine_key = (os.environ.get('AI_ENGINE_API_KEY') or '').strip()
+    timeout_raw = (os.environ.get('AI_ENGINE_ADVICE_TIMEOUT_SECONDS') or '180').strip()
+    parsed_url = urllib.parse.urlsplit(engine_url)
+    is_local_http = (
+        parsed_url.scheme == 'http'
+        and parsed_url.hostname in ('127.0.0.1', 'localhost', '::1')
+    )
+    if (
+        not (parsed_url.scheme == 'https' or is_local_http)
+        or not parsed_url.hostname
+        or parsed_url.username
+        or parsed_url.password
+        or parsed_url.query
+        or parsed_url.fragment
+        or parsed_url.path.rstrip('/')
+    ):
+        raise ValueError("AI_ENGINE_URL must be an HTTPS base URL (or HTTP on localhost)")
+    parsed_url.port  # Raises ValueError for an invalid port.
+    timeout_seconds = float(timeout_raw)
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 120:
+        raise ValueError("AI_ENGINE_ADVICE_TIMEOUT_SECONDS must be greater than 120")
+    if not engine_key:
+        raise ValueError("AI_ENGINE_API_KEY is not configured")
+    return engine_url.rstrip('/'), engine_key, timeout_seconds
+
+
+def _proxy_advice_to_ai_engine(data):
+    """Send a text advice request to the wellbeing AI engine (local Ollama RAG)."""
+    question = _norm(data.get('question') or '')
+    if not question:
+        return jsonify({"error": "Question is required", "code": "question_required"}), 400
+
+    context_username = _norm(data.get('context_username') or '').lower()
+    acting_username = _norm(data.get('username') or context_username or 'unknown').lower()
+    display_name = _norm(data.get('user_name') or '')
+    onboarding_interview = question == ONBOARDING_START_TOKEN or bool(data.get('onboarding_interview'))
+    if onboarding_interview and _user_onboarding_completed(acting_username):
+        onboarding_interview = False
+    log_question = "[Welcome interview started]" if question == ONBOARDING_START_TOKEN else question
+    request_id = _norm(data.get('request_id') or str(uuid.uuid4()))
+
+    def log_and_fail(message, code, status, model=''):
+        _insert_ai_chat_log(
+            username=acting_username,
+            display_name=display_name,
+            role='user',
+            context_username=context_username,
+            source='user',
+            question=log_question,
+            response=None,
+            references=None,
+            model=model,
+            success=False,
+            error_message=message,
+            had_image=False,
+        )
+        return jsonify({"error": message, "code": code, "request_id": request_id}), status
+
+    try:
+        engine_url, engine_key, timeout_seconds = _ai_engine_settings()
+    except (TypeError, ValueError) as exc:
+        return log_and_fail(f"AI engine configuration error: {exc}", "ai_engine_configuration", 503)
+
+    outbound = dict(data)
+    outbound['request_id'] = request_id
+    outbound['onboarding_interview'] = onboarding_interview
+    if question == ONBOARDING_START_TOKEN and not onboarding_interview:
+        outbound['question'] = "Hello! I'm new here and would like a quick welcome chat to get started."
+    try:
+        engine_response = httpx.post(
+            engine_url + '/api/ai/advice',
+            json=outbound,
+            headers={'X-Internal-Api-Key': engine_key},
+            timeout=httpx.Timeout(timeout_seconds),
+        )
+    except httpx.TimeoutException:
+        return log_and_fail("The AI engine timed out before returning advice.", "ai_engine_timeout", 503)
+    except httpx.RequestError:
+        return log_and_fail("The AI engine is unavailable right now.", "ai_engine_unavailable", 503)
+
+    try:
+        engine_data = engine_response.json()
+    except ValueError:
+        engine_data = None
+    if not isinstance(engine_data, dict):
+        if engine_response.status_code == 404:
+            return log_and_fail("The AI engine is unavailable right now.", "ai_engine_unavailable", 503)
+        return log_and_fail("The AI engine returned an invalid response.", "ai_engine_invalid_response", 502)
+    engine_model = engine_data.get('model') or ''
+    request_id = engine_data.get('request_id') or request_id
+
+    if not engine_response.is_success:
+        upstream_message = _norm(engine_data.get('error') or engine_data.get('message') or '')
+        status_code = engine_response.status_code
+        if status_code in (401, 403):
+            return log_and_fail("The web app could not authenticate with the AI engine.", "ai_engine_authentication", 502, engine_model)
+        if status_code == 404:
+            return log_and_fail("The AI engine is unavailable right now.", "ai_engine_unavailable", 503, engine_model)
+        if 400 <= status_code < 500:
+            return log_and_fail(upstream_message or "The AI engine rejected the advice request.", "ai_engine_rejected_request", status_code, engine_model)
+        return log_and_fail(upstream_message or "The AI engine is unavailable right now.", "ai_engine_unavailable", 503, engine_model)
+
+    retrieval_mode = _norm(engine_data.get('retrieval_mode') or '').lower()
+    if not onboarding_interview and retrieval_mode not in ('hybrid', 'vector', 'keyword'):
+        return log_and_fail("The AI engine response did not confirm evidence retrieval.", "rag_unavailable", 502, engine_model)
+
+    response_text = engine_data.get('response') or engine_data.get('answer')
+    if not isinstance(response_text, str) or not response_text.strip():
+        return log_and_fail("The AI engine returned an empty advice response.", "ai_engine_invalid_response", 502, engine_model)
+
+    references = engine_data.get('references')
+    sources = engine_data.get('sources')
+    references = references if isinstance(references, list) else []
+    sources = sources if isinstance(sources, list) else []
+    log_id = _insert_ai_chat_log(
+        username=acting_username,
+        display_name=display_name,
+        role='user',
+        context_username=context_username,
+        source='user',
+        question=log_question,
+        response=response_text,
+        references=references or sources,
+        model=engine_model,
+        success=True,
+        had_image=False,
+    )
+
+    result = {
+        "response": response_text,
+        "references": references,
+        "sources": sources,
+        "log_id": log_id,
+        "request_id": request_id,
+    }
+    for field in ('answer', 'retrieval_mode', 'retrieval_debug', 'engine', 'model'):
+        if field in engine_data:
+            result[field] = engine_data[field]
+    return jsonify(result)
+
+
+def _advice_request_has_image(data):
+    if str(data.get('image') or '').startswith('data:image'):
+        return True
+    history = data.get('conversation_history') or []
+    return isinstance(history, list) and any(
+        isinstance(message, dict) and str(message.get('image') or '').startswith('data:image')
+        for message in history
+    )
+
+
 @app.route('/api/ai/advice', methods=['POST'])
 def get_ai_advice():
-    """Get AI advice using OpenAI with conversation memory"""
+    """Get AI advice from the wellbeing AI engine when configured, else OpenAI."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "A JSON request body is required"}), 400
+    # The engine is text-only; photo questions stay on the OpenAI vision path.
+    if (os.environ.get('AI_ENGINE_URL') or '').strip() and not _advice_request_has_image(data):
+        return _proxy_advice_to_ai_engine(data)
+
     if not OPENAI_AVAILABLE:
         return jsonify({"error": "OpenAI not configured. Please install openai package and set OPENAI_API_KEY environment variable."}), 503
-    
-    data = request.get_json()
+
     question = data.get('question', '')
     user_name = data.get('user_name', 'User')
     likes = data.get('likes', '')

@@ -338,7 +338,7 @@ class ApiService {
         if (contextUsername) body.context_username = contextUsername;
         if (actingUsername) body.username = actingUsername;
         if (onboardingInterview) body.onboarding_interview = true;
-        return await this.request('/ai/advice', { method: 'POST', body });
+        return await this.request('/ai/advice', { method: 'POST', body, timeoutMs: 240000 });
     }
 
     async finishUserOnboarding(username, conversationHistory) {
